@@ -11,13 +11,13 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 2 August 2026 — plan reviewed to v6.3, project not started. `PLAN.md`, `docs/TASKS.md` and this file now all carry the same version; up to v6.2 they did not, and it was not possible to tell which revision a document belonged to.
+Last updated: 4 August 2026 — T-000 complete, PR #3 open. Repository initialised (git + remote `MagicAlien/llama-manager`, private); `main` holds the v6.3 planning documents only. The CI gates are live and their red path has been executed against deliberately broken code.
 
 ---
 
 ## In progress
 
-*(nothing)*
+*(nothing — T-000 is Done; its PR #3 awaits review. When it merges, take T-001.)*
 
 > One task at a time. If something is listed here, it is yours: check out its branch and continue it. Do not start a new task.
 
@@ -25,7 +25,7 @@ Last updated: 2 August 2026 — plan reviewed to v6.3, project not started. `PLA
 
 ## Next up
 
-**T-000 — CI pipeline.** No dependencies. This is the starting point.
+**T-001 — Scaffold** `[dep: T-000]`. Take it once PR #3 has merged.
 
 Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
 
@@ -35,12 +35,9 @@ Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies a
 
 ## Done
 
-*(nothing yet)*
-
-<!-- Format:
-- **T-000** — CI pipeline · PR #1 · 2026-08-02
-  - Note: anything a later session needs that the code does not show.
--->
+- **T-000** — CI pipeline · PR #3 · 2026-08-04
+  - Note: the workflow's `gates` job is the reusable job T-002 extends. Red path demonstrated by throwaway PRs #1 (clippy warning) and #2 (unformatted) — close them without merging once #3 lands, and delete `demo-t000-clippy` / `demo-t000-unformatted`. The `demo:failure` label job re-proves the red path on demand. Warm green run: 51 s.
+  - Note: `main` runs red until PR #3 merges (it carries no code yet). That run (30926658728) failing at `cargo fmt --check` is expected, not a regression.
 
 ---
 
@@ -106,12 +103,19 @@ Things noticed in passing that are not part of any current task — a rough edge
 - **`docs/LLAMACPP.md` now exists but contains no verified entry.** Every flag in it is marked `[doc]` or `[assumed]`; nothing is marked verified, because only T-023 can do that. Treat a `[assumed]` flag exactly as `AGENTS.md` §1 says: check it against `docs/verified-flags.md` first, and stop if it is absent or retyped.
 - **The four questions that used to be `docs/owner-verification.md` Session 1 are now T-025**, joined by a fifth on how a projector is declared on the preset channel, and the reason is worth remembering: none of them needs a GPU, a real model, or the target machine, so classifying them as the owner's violated `AGENTS.md` §3 in the one document that defines it. What stayed with the owner is what genuinely needs hardware.
 - **`docs/verified-flags.md` does not exist yet, and cannot until T-023 runs.** `AGENTS.md` §1 makes checking it an unconditional precondition for emitting any flag, and the PR template has a mandatory column for it. This is not a contradiction, because no task before T-033 emits a flag and T-033 depends on T-023 — but the ordering is load-bearing and worth knowing before someone "fixes" it by hand-writing the file. It is produced by `scripts/export-verified-flags.ps1` from the database, **after** T-023, and committed. Nothing writes it before then, and nothing outside that script writes it at all. *(An earlier version of this note had lost its subject and claimed the file was scheduled to be written before T-023, which is the opposite of what T-023 and `docs/DEV-SETUP.md` say.)*
+- **`actions/checkout@v4` is on borrowed time (T-000).** Every CI run prints a deprecation warning because the action targets Node 20, which GitHub is phasing out; the runner forces it onto Node 24. Harmless today, but a future task should bump to a Node-24-native checkout major version — in the same PR as whatever else touches `ci.yml`, never alone.
 
 ---
 
 ## Facts established
 
 Discoveries that later tasks depend on and that no document predicted. This is the section that saves a future session from re-learning something the hard way.
+
+### F-001 — GitHub Actions pwsh steps propagate the last native exit code (T-000)
+
+GitHub Actions appends `exit $LASTEXITCODE` after every pwsh `run:` block. A step that deliberately runs a command expected to fail (e.g. `cargo clippy` on broken code) **fails the step even after a successful `$LASTEXITCODE` check**, unless the script ends with an explicit `exit 0`. Caught in the T-000 demo job (run 30928203565): the "Expect clippy to fail" step printed "clippy failed as expected (exit 101)" and then failed with exit code 1. **T-025's `scripts/probe-router.ps1` steps must end each probe with an explicit exit code** when a command is expected to fail.
+
+Also observed: `windows-latest` currently resolves to Windows Server 2025 (image `windows-2025-vs2026`, VS 2026 build tools preinstalled), and `actions/checkout@v4` triggers a Node-20 deprecation warning — it runs on Node 24.
 
 ### F-000 — Preliminary evidence on the registration channel — **NOT YET CONFIRMED**
 
