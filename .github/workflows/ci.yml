@@ -14,6 +14,9 @@ name: CI
 
 on:
   pull_request:
+    # `labeled` and `unlabeled` beyond the defaults: the demo-failure job is
+    # gated on the demo:failure label, so label changes must re-run CI.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
