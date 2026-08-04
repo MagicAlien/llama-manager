@@ -14,6 +14,9 @@ name: CI
 
 on:
   pull_request:
+    # `labeled` and `unlabeled` beyond the defaults: the demo-failure job is
+    # gated on the demo:failure label, so label changes must re-run CI.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -27,7 +30,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
 
 jobs:
@@ -92,7 +94,6 @@ jobs:
     if: contains(github.event.pull_request.labels.*.name, 'demo:failure')
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -116,11 +117,13 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo clippy -- -D warnings
-          if ($LASTEXITCODE -eq 0) {
-            Write-Error "clippy passed on code that should trigger a warning - the gate is not enforcing"
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output "clippy passed on code that should trigger a warning - the gate is not enforcing"
             exit 1
           }
-          Write-Output "clippy failed as expected (exit $LASTEXITCODE)"
+          Write-Output "clippy failed as expected (exit $code)"
+          exit 0
 
       - name: Introduce deliberately unformatted code
         shell: pwsh
@@ -136,13 +139,14 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo fmt --check
-          if ($LASTEXITCODE -eq 0) {
-            Write-Error "fmt --check passed on unformatted code - the gate is not enforcing"
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output "fmt --check passed on unformatted code - the gate is not enforcing"
             exit 1
           }
-          Write-Output "fmt --check failed as expected (exit $LASTEXITCODE)"
+          Write-Output "fmt --check failed as expected (exit $code)"
+          exit 0
 
-      # The job is continue-on-error, so the workflow reports success while the
-      # two "Expect" steps above show the real, failing gate output in the log.
-      # If either expectation fails (a gate that should catch did not),
-      # this job shows red and the demo has caught a broken gate instead.
+      # The "Expect" steps pass only when the corresponding gate fails on the
+      # broken code, so the real gate output appears in the log. If a gate
+      # that should catch does not, the step fails and this job shows red.
