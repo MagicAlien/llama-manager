@@ -11,25 +11,17 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 4 August 2026 — T-000 merged (PR #3, into `main`). T-001 (Scaffold) is **in progress**: implemented and pushed on branch `t-001-scaffold`, PR not yet opened (see In progress below — needs a human with GitHub API/browser access, unavailable to this session). D-006 implemented, pending CI confirmation before it can read resolved. D-004 and D-005 remain open, owner decisions, not touched.
+Last updated: 4 August 2026 — T-000 merged (PR #3, into `main`). T-001 (Scaffold) is **in progress**, PR #4 open, all six CI gates green (warm run 6 m 17 s), D-006 resolved. Still waiting on a real Windows confirmation that `npm run tauri dev` opens a window and writes the log file before T-001 moves to Done. D-004 and D-005 remain open, owner decisions, not touched.
 
 ---
 
 ## In progress
 
-**T-001 — Scaffold.** Branch `t-001-scaffold`, commit `f245e9d`, pushed to `origin`. **PR not yet opened** — the working environment for this session has push access to `origin` but no GitHub API or browser access (network sandbox allowlists `github.com` for git only; `api.github.com` and browser tools were unavailable), so the PR itself needs a human to open it from `https://github.com/MagicAlien/llama-manager/pull/new/t-001-scaffold`. The PR body is drafted and ready to paste.
+**T-001 — Scaffold.** Branch `t-001-scaffold`, PR #4, open. All six CI gates green on the PR (`cargo fmt --check`, `cargo build`, `cargo clippy -- -D warnings`, `cargo test`, `npm run lint`, `npm run test`) after one fixup commit (`cargo fmt` wanted the `LOCALAPPDATA` `.map()` chain wrapped — applied the exact diff CI reported). **Warm CI time: 6 m 17 s** — this is a real Tauri dependency tree (versus T-000's 51 s on zero dependencies) and is the number this task exists to measure; not yet judged against a budget (`docs/DEV-SETUP.md`'s "under 10 minutes" is unenforced, per T-000 Observations — worth a decision at some point, not blocking here).
 
-Everything in the task is implemented — Tauri 2 + React + TS + Tailwind scaffold, `rust-toolchain.toml` + `.cargo/config.toml`, D-006's fix (both halves) and the Cargo-cache staleness fix noted in Observations, `scripts/lint-empty.js` replaced by real ESLint. What is **not yet verified**, because this session had no Rust toolchain (not installable: no root, `sh.rustup.rs` blocked by the network allowlist) and no Windows/WebView2 machine:
+Still open pending one thing: `npm run tauri dev` opening a window and `%LOCALAPPDATA%\LlamaManager\logs\app.log` appearing on a real Windows run — requested from the project owner, not yet confirmed. Move to Done once that comes back positive (or record what actually happened if it doesn't).
 
-- `cargo build`, `cargo test`, `cargo clippy -- -D warnings`, `cargo fmt --check` — written carefully, not compiled locally. First real evidence will be the CI run on the opened PR.
-- `npm run tauri dev` opening a window, and the log file appearing at `%LOCALAPPDATA%\LlamaManager\logs\app.log` — needs a real Windows run.
-- Warm CI time for this scaffold (the number T-001 is supposed to record, superseding T-000's dependency-free 51 s) — needs a completed CI run, which needs the PR open.
-
-Verified locally and can be pointed at: `npm install`, `npx tsc --noEmit` (clean), `npm run lint` (clean, real ESLint over real `src/`), `npm run build` (succeeds; output CSS contains compiled Tailwind utility classes, not passthrough `@tailwind` directives), `npm run test` (passes with zero tests via `--passWithNoTests`, exit 0).
-
-`src-tauri/Cargo.lock` is **not** included in this commit — no Rust toolchain and no `crates.io` network access in this sandbox to generate an accurate one. `cargo build` on CI will generate it; it should be committed back once available (do not hand-write it).
-
-**Next session or human action:** open the PR from the link above using the drafted body, let CI run, then either continue this task here with the results or report them back so PROGRESS.md and the PR checklist can be finished honestly — several boxes are deliberately left unchecked pending that evidence (`AGENTS.md` §5: only tick a box you can point at evidence for).
+`src-tauri/Cargo.lock` was not included in the original commit (this session had no Rust toolchain and no `crates.io` access to generate an accurate one); CI's `cargo build` will have generated one — **commit it back from a CI artifact or a real Windows checkout before merging**, don't hand-write it.
 
 > One task at a time. If something is listed here, it is yours: check out its branch and continue it. Do not start a new task.
 
@@ -114,7 +106,7 @@ Things where reality differs from the documents, or where a task is ambiguous. *
 - Evidence: `ci.yml` installs the toolchain with `dtolnay/rust-toolchain@stable` and adds clippy and rustfmt to *that* toolchain. T-001 must create `rust-toolchain.toml` pinning `channel = "1.88"`, and that file overrides the action's default for every subsequent cargo invocation. As `docs/DEV-SETUP.md` §143 specifies it, the file declares a channel and a target and no components — so rustup fetches 1.88 without clippy or rustfmt, and `cargo clippy` fails with "no such command". A gate red for the wrong reason is worse than a gate that is missing, because it trains everyone to ignore it. The action's own documentation states it is incompatible with a checked-in `rust-toolchain.toml`. Separately, `docs/DEV-SETUP.md` §194 states that T-000's pipeline installs nothing beyond components and cached dependencies; it installs a toolchain.
 - Affects: `.github/workflows/ci.yml`, `docs/DEV-SETUP.md` §143 §194, T-001
 - Proposed: pin the action to the version the file pins (`dtolnay/rust-toolchain@1.88`) **and** add `components = ["clippy", "rustfmt"]` to `rust-toolchain.toml`, so the pin holds whichever of the two wins; then correct §194 to say the pipeline installs a pinned toolchain with components. Unlike D-004 and D-005 this is not a document-only fix, so it is not a `T-1xx`: both halves belong in T-001, which is the PR that creates the file that breaks it.
-- Status: open — implemented on `t-001-scaffold` (both halves: `dtolnay/rust-toolchain@1.88` pinned in both `ci.yml` jobs; `components = ["clippy", "rustfmt"]` was already present in `docs/DEV-SETUP.md` §143's example, so only §194 needed the correction, done). Stays `open` until CI on the opened PR actually shows clippy and fmt passing — that demonstration is the entire point of this entry, and it hasn't run yet.
+- Status: resolved in T-001 (PR #4). Both halves landed: `dtolnay/rust-toolchain@1.88` pinned in both `ci.yml` jobs; `docs/DEV-SETUP.md` §194 corrected (`components = ["clippy", "rustfmt"]` was already present in §143's example, so that half needed no change). Demonstrated, not just asserted: PR #4's CI shows `cargo clippy -- -D warnings` and `cargo fmt --check` both green under the pin.
 
 <!-- Format:
 ### D-00x — <one-line summary>
