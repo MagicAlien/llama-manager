@@ -1,0 +1,19 @@
+# Build output
+target/
+dist/
+
+# Dependencies
+node_modules/
+
+# Generated fixtures (T-030 and later). The 65 GB sparse fixture expands to
+# full size if copied off a sparse-aware filesystem — never commit it.
+src-tauri/fixtures/*.gguf
+
+# Downloaded llama-server binaries and archives (T-023 and later).
+llama-server*
+*.zip
+
+# Editor noise
+.vscode/
+.idea/
+*.log

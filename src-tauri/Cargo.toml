@@ -1,0 +1,10 @@
+[package]
+name = "llama-manager"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# T-000 bootstrap crate: the minimum that makes `cargo build|test|clippy|fmt`
+# meaningful before T-001 replaces it with the real Tauri scaffold. No
+# dependency belongs here that docs/DEV-SETUP.md does not already require.
+[dependencies]
