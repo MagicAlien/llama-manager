@@ -92,7 +92,6 @@ jobs:
     if: contains(github.event.pull_request.labels.*.name, 'demo:failure')
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -142,7 +141,6 @@ jobs:
           }
           Write-Output "fmt --check failed as expected (exit $LASTEXITCODE)"
 
-      # The job is continue-on-error, so the workflow reports success while the
-      # two "Expect" steps above show the real, failing gate output in the log.
-      # If either expectation fails (a gate that should catch did not),
-      # this job shows red and the demo has caught a broken gate instead.
+      # The "Expect" steps pass only when the corresponding gate fails on the
+      # broken code, so the real gate output appears in the log. If a gate
+      # that should catch does not, the step fails and this job shows red.
