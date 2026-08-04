@@ -36,7 +36,7 @@ Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies a
 ## Done
 
 - **T-000** — CI pipeline · PR #3 · 2026-08-04
-  - Note: the workflow's `gates` job is the reusable job T-002 extends. Red path demonstrated by throwaway PRs #1 (clippy warning) and #2 (unformatted) — close them without merging once #3 lands, and delete `demo-t000-clippy` / `demo-t000-unformatted`. The `demo:failure` label job re-proves the red path on demand. Warm green run: 51 s.
+  - Note: the workflow's `gates` job is the reusable job T-002 extends. Red path demonstrated by throwaway PRs #1 (clippy warning) and #2 (unformatted); both closed without merging and their branches deleted — run ids and step-level evidence are recorded in PR #3's body. The `demo:failure` label job re-proves the red path on demand. Warm green run: 51–63 s.
   - Note: `main` runs red until PR #3 merges (it carries no code yet). That run (30926658728) failing at `cargo fmt --check` is expected, not a regression.
 
 ---
