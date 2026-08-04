@@ -191,6 +191,6 @@ An application that writes into its own source tree is a bug. The database is th
 
 ## CI
 
-`windows-latest` on GitHub Actions ships Rust, Node and the MSVC build tools, so T-000's pipeline installs nothing beyond components and cached dependencies. If a task ever needs something not on that image, add it to the workflow **and** to this document in the same PR — a dependency that exists only in CI is a trap for the next developer.
+`windows-latest` on GitHub Actions ships Rust, Node and the MSVC build tools, but from T-001 onward the pipeline does not rely on whatever default toolchain the image happens to preinstall: it installs the pinned toolchain named in `rust-toolchain.toml` (`dtolnay/rust-toolchain@1.88`, with the `clippy` and `rustfmt` components), so CI and every developer machine resolve to the same compiler (PROGRESS.md D-006). If a task ever needs something not on that image, add it to the workflow **and** to this document in the same PR — a dependency that exists only in CI is a trap for the next developer.
 
 CI does not download llama-server. T-023, T-025 and T-043 run against the committed captures and result files; the download happens once, on the machine working those tasks.
