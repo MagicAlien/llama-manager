@@ -15,7 +15,8 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// invariant against `expect()` here, but a missing log directory is not a
 /// reason to fail to launch.
 fn log_dir() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("LlamaManager").join("logs"))
+    std::env::var_os("LOCALAPPDATA")
+        .map(|base| PathBuf::from(base).join("LlamaManager").join("logs"))
 }
 
 /// Initializes tracing with a daily-rotating file appender plus stderr.
