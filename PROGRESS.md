@@ -11,17 +11,13 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 4 August 2026 — T-000 merged (PR #3, into `main`). T-001 (Scaffold) is **in progress**, PR #4 open, all six CI gates green (warm run 6 m 17 s), D-006 resolved. Still waiting on a real Windows confirmation that `npm run tauri dev` opens a window and writes the log file before T-001 moves to Done. D-004 and D-005 remain open, owner decisions, not touched.
+Last updated: 4 August 2026 — T-000 merged (PR #3, into `main`). T-001 (Scaffold) is **Done**, PR #4 open (all six CI gates green, warm run 6 m 17 s; `npm run tauri dev` confirmed opening a window and writing the log file on a real Windows machine). D-006 resolved. D-004 and D-005 remain open, owner decisions, not touched. Take T-002 once PR #4 merges.
 
 ---
 
 ## In progress
 
-**T-001 — Scaffold.** Branch `t-001-scaffold`, PR #4, open. All six CI gates green on the PR (`cargo fmt --check`, `cargo build`, `cargo clippy -- -D warnings`, `cargo test`, `npm run lint`, `npm run test`) after one fixup commit (`cargo fmt` wanted the `LOCALAPPDATA` `.map()` chain wrapped — applied the exact diff CI reported). **Warm CI time: 6 m 17 s** — this is a real Tauri dependency tree (versus T-000's 51 s on zero dependencies) and is the number this task exists to measure; not yet judged against a budget (`docs/DEV-SETUP.md`'s "under 10 minutes" is unenforced, per T-000 Observations — worth a decision at some point, not blocking here).
-
-Still open pending one thing: `npm run tauri dev` opening a window and `%LOCALAPPDATA%\LlamaManager\logs\app.log` appearing on a real Windows run — requested from the project owner, not yet confirmed. Move to Done once that comes back positive (or record what actually happened if it doesn't).
-
-`src-tauri/Cargo.lock` was not included in the original commit (this session had no Rust toolchain and no `crates.io` access to generate an accurate one); CI's `cargo build` will have generated one — **commit it back from a CI artifact or a real Windows checkout before merging**, don't hand-write it.
+*(nothing — T-001 is Done; its PR #4 awaits merge. When it merges, take T-002.)*
 
 > One task at a time. If something is listed here, it is yours: check out its branch and continue it. Do not start a new task.
 
@@ -29,7 +25,7 @@ Still open pending one thing: `npm run tauri dev` opening a window and `%LOCALAP
 
 ## Next up
 
-**T-001 — Scaffold** `[dep: T-000]`. Take it once PR #3 has merged. **Read D-006 first.** The `rust-toolchain.toml` T-001 is required to create silently disables the clippy and fmt gates unless `ci.yml` changes in the same PR.
+**T-002 — Type generation** `[dep: T-001]`. Take it once PR #4 has merged.
 
 Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
 
@@ -43,6 +39,15 @@ Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies a
   - Note: `jobs.gates` in `.github/workflows/ci.yml` is the job T-002 extends — **by editing it, not by calling it**; it is not a `workflow_call` job (see Observations). Red path demonstrated by throwaway PRs #1 (clippy warning) and #2 (unformatted); both closed without merging and their branches deleted — run ids and step-level evidence are recorded in PR #3's body. The `demo:failure` label job re-proves the red path on demand. Warm green run: 51–63 s **on a crate with no dependencies** — see Observations before treating that as the pipeline's real cost.
   - Note: T-000 also shipped `.gitignore`, which `docs/TASKS.md` assigns to T-001. T-001 still owes `rust-toolchain.toml` and `.cargo/config.toml`.
   - Note: `main` runs red until PR #3 merges (it carries no code yet). That run (30926658728) failing at `cargo fmt --check` is expected, not a regression.
+
+- **T-001** — Scaffold · PR #4 · 2026-08-04
+  - Note: D-006 closed in this PR (both halves, demonstrated, not just asserted): `dtolnay/rust-toolchain` pinned to `@1.88` in both `ci.yml` jobs, `docs/DEV-SETUP.md` §194 corrected. CI on PR #4 shows `cargo clippy -- -D warnings` and `cargo fmt --check` both green under the pin.
+  - Note: **Warm CI time: 6 m 17 s**, real Tauri dependency tree — supersedes T-000's 51 s on a dependency-free crate, which proved nothing about this budget. `docs/DEV-SETUP.md`'s "under 10 minutes" is still unenforced (`timeout-minutes: 30`, per T-000 Observations); 6 m 17 s fits inside it today but nothing stops that from drifting — worth an owner decision on whether to gate it, not urgent.
+  - Note: Cargo-cache staleness (T-000 Observations: `actions/cache` never re-saves on a hit) fixed in this PR — key now suffixed with `github.run_id`, `restore-keys` falls back to the dependency-hash prefix.
+  - Note: `scripts/lint-empty.js` replaced by a real ESLint flat config in the same commit range that added `src/`, per its own tripwire comment.
+  - Note: One `cargo fmt` fixup needed after the first CI run (the `LOCALAPPDATA` `.map()` chain wanted wrapping) — applied the exact diff CI reported, second run green.
+  - Note: This session had no Rust toolchain and no Windows/WebView2 machine; `cargo build/test/clippy/fmt` were verified by CI, and `npm run tauri dev` opening a window plus the log file at `%LOCALAPPDATA%\LlamaManager\logs\app.log` were verified by the project owner on a real Windows checkout — not by the agent directly. Worth knowing if a future session needs to distinguish agent-verified from owner-verified evidence in this entry's history.
+  - Note: `src-tauri/Cargo.lock` was not committed by the agent (no toolchain/registry access to generate an accurate one); confirm it has been committed from a real `cargo build` (CI's or the owner's Windows run) before or as part of merging PR #4.
 
 ---
 
