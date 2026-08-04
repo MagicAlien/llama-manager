@@ -5,6 +5,6 @@
   "description": "T-000 bootstrap: the minimum that makes `npm run lint` and `npm run test` meaningful before T-001 replaces it with the real scaffold.",
   "scripts": {
     "lint": "node scripts/lint-empty.js",
-    "test": "node --test src"
+    "test": "node --test"
   }
 }
