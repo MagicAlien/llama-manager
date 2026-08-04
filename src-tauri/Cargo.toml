@@ -4,7 +4,14 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
-# T-000 bootstrap crate: the minimum that makes `cargo build|test|clippy|fmt`
-# meaningful before T-001 replaces it with the real Tauri scaffold. No
-# dependency belongs here that docs/DEV-SETUP.md does not already require.
+# T-001 scaffold crate: replaces T-000's bootstrap outright. Only what the
+# scaffold itself needs — no core/, ipc/ or db/ dependency belongs here
+# until the task that adds that module (PLAN.md §3).
 [dependencies]
+tauri = { version = "2", features = [] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
