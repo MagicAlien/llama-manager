@@ -117,11 +117,13 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo clippy -- -D warnings
-          if ($LASTEXITCODE -eq 0) {
-            Write-Error "clippy passed on code that should trigger a warning - the gate is not enforcing"
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output "clippy passed on code that should trigger a warning - the gate is not enforcing"
             exit 1
           }
-          Write-Output "clippy failed as expected (exit $LASTEXITCODE)"
+          Write-Output "clippy failed as expected (exit $code)"
+          exit 0
 
       - name: Introduce deliberately unformatted code
         shell: pwsh
@@ -137,11 +139,13 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo fmt --check
-          if ($LASTEXITCODE -eq 0) {
-            Write-Error "fmt --check passed on unformatted code - the gate is not enforcing"
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+            Write-Output "fmt --check passed on unformatted code - the gate is not enforcing"
             exit 1
           }
-          Write-Output "fmt --check failed as expected (exit $LASTEXITCODE)"
+          Write-Output "fmt --check failed as expected (exit $code)"
+          exit 0
 
       # The "Expect" steps pass only when the corresponding gate fails on the
       # broken code, so the real gate output appears in the log. If a gate
