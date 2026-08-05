@@ -28,6 +28,13 @@ thiserror = "2"
 # #[ts(type = "unknown")] instead (core/types.rs), so ts-rs never needs its
 # own binding for serde_json::Value — see the comment on that field for why.
 ts-rs = { version = "12", features = ["chrono-impl"] }
+# T-003 (docs/CONTRACTS.md §3, db/): SQLite via rusqlite (bundled), the
+# crate PLAN.md §3's "Approved Rust crates" list names for this — not
+# re-justified here, and sqlx / any other driver is not added, per the
+# task's own instruction not to reopen that choice. "bundled" links a
+# vendored SQLite instead of requiring one on the build machine, matching
+# `docs/DEV-SETUP.md`'s "no toolchain component beyond Rust + MSVC" story.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

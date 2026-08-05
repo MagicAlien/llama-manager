@@ -11,19 +11,19 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 5 August 2026 — T-000 (PR #3) and T-001 (PR #4) merged into `main`. T-002 (Type generation) is **Done**, PR #5, all CI gates green in 6 m on a real run (real toolchain, real `cargo test` — including the 14 round-trip tests). D-004 and D-005 remain open, owner decisions, not touched. D-007, D-008, D-009 raised and resolved within T-002 (same pattern as D-006 in T-001), all now confirmed correct by the green build. Take T-003 next.
+Last updated: 5 August 2026 — T-000 (PR #3), T-001 (PR #4) and T-002 (PR #5) merged into `main`. T-003 (Database layer) is **Done**, PR #6, CI green — merged pending owner's final click (same state T-002's entry once recorded for PR #5). Agent had no local Rust toolchain and no push access this session, so the branch was handed to the owner as a patch, applied and gated for real on a Windows machine — one real `clippy::type_complexity` finding (fixed by factoring two tuple types rather than suppressing) and one `cargo fmt --check` finding surfaced by CI specifically (not caught locally, since the clippy fixup was re-gated with clippy alone, not a full re-run — worth remembering for the next task, see Observations). D-004 and D-005 remain open, owner decisions, not touched. D-010 (new, T-003) also left open. Take T-004 next.
 
 ---
 
 ## In progress
 
-*(nothing — T-002 is Done, PR #5, merged pending owner's final click. Take T-003 next.)*
+*(nothing — T-003 is Done, PR #6, CI green, merged pending owner's final click. Take T-004 next.)*
 
 ---
 
 ## Next up
 
-**T-003 — Database layer** `[dep: T-001]`. Take it once T-002 is Done (T-003 does not depend on T-002, but T-002 is lower-numbered and unblocked, so the selection rule puts it first).
+**T-004 — Error model** `[dep: T-001]`. Lowest-numbered task whose dependency (`T-001`) is `Done` and which is not `Blocked` — T-003 no longer occupies that slot now that it's closed.
 
 Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
 
@@ -32,6 +32,14 @@ Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies a
 ---
 
 ## Done
+
+- **T-003** — Database layer · PR #6 · 2026-08-05
+  - Note: `db/` (migrations + queries) implemented against `docs/CONTRACTS.md` §3's schema, transcribed verbatim — `launch_history` and `retained_model_settings` carry no `FOREIGN KEY` to `models` (D-010 below). Forward-only migration runner: idempotent on fresh and already-migrated databases, `AppError::SchemaTooNew` on a too-new recorded version. `rusqlite` (`bundled`) added per `PLAN.md` §3's approved list, not re-justified. `Backend::Display`/`FromStr` (compact `'cuda:13'`/`'vulkan'`/`'cpu'` form for `runtimes.backend`, distinct from the serde-tagged JSON form) added to `core/types.rs`, round-tripped by test.
+  - Note: D-010 raised in pre-implementation review, same pattern as D-004 — `docs/TASKS.md` T-003's acceptance text contradicts itself on whether `launch_history` cascades from `models` ("survives deletion, no FK" vs. "cascades", in the same paragraph), and `docs/CONTRACTS.md` §3's intro line implies a `REFERENCES` clause absent from every transcribed `CREATE TABLE`. Implemented against `CONTRACTS.md`'s own stated rationale ("Removal is not amnesia" — no FK, rows survive); the "cascade" sentence is not implemented or tested as one. Left `open` for the owner.
+  - Note: This session had no Rust toolchain and, new versus T-001/T-002, no push access to this repository — the branch was handed to the owner as a patch rather than pushed directly. The owner applied it on a real Windows machine and ran the full local gate for real. One real finding: `cargo clippy -- -D warnings` flagged `clippy::type_complexity` on two tuple types in `db/queries.rs` (16-element `models` row, 8-element `launch_history` row); fixed by factoring them into named types (`ModelRowTuple`, `LaunchHistoryTuple`), per clippy's own suggestion, rather than suppressed. Full gate green after that fix: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` (all T-003 tests, including the unique-active-runtime index, the `schema_version` `CHECK (id = 1)` constraint, `foreign_keys` pragma, and the `Backend` round-trip), `npm run lint`, `npm run test`, `npm run generate-types` (no diff to `src/lib/types.ts`, as expected — this task touches no frontend).
+  - Note: `src-tauri/Cargo.lock` regenerated for real as part of the owner's gate run; now lists `rusqlite` and its transitive dependencies.
+  - Note: a stray `package-lock.json` diff (npm rewriting `"peer": true` entries under a locally different npm version than produced the committed lockfile) showed up alongside the real `cargo fmt` diff after the clippy fixup and was reverted — not part of this task, not committed. Worth knowing if it recurs: it's npm/local-environment noise, not something T-003 or any Rust change caused.
+  - Note: **fixing forward from CI, not just from a re-run of the specific check that failed, matters** — after the `clippy::type_complexity` fixup, only `cargo clippy` was re-run locally before pushing, not the full gate; CI then caught a `cargo fmt --check` failure on that same fixup that a full local re-run would have caught first. Worth remembering for future fixup patches: re-run the whole gate, not just the check that originally failed.
 
 - **T-000** — CI pipeline · PR #3 · 2026-08-04
   - Note: `jobs.gates` in `.github/workflows/ci.yml` is the job T-002 extends — **by editing it, not by calling it**; it is not a `workflow_call` job (see Observations). Red path demonstrated by throwaway PRs #1 (clippy warning) and #2 (unformatted); both closed without merging and their branches deleted — run ids and step-level evidence are recorded in PR #3's body. The `demo:failure` label job re-proves the red path on demand. Warm green run: 51–63 s **on a crate with no dependencies** — see Observations before treating that as the pipeline's real cost.
@@ -141,6 +149,16 @@ Things where reality differs from the documents, or where a task is ambiguous. *
 - Proposed: add `PartialEq` to both derive lists — mechanical, single reading, no design question involved (unlike D-004/D-005, which are genuinely the owner's to arbitrate). Applied directly in `core/types.rs`, following the precedent D-006 set in T-001 for a fix that belongs in the code being written, not in a document-only correction task.
 - Status: resolved in T-002. `FlashAttn` and `AppError` both gained `PartialEq` in `core/types.rs`, confirmed compiling by a real `cargo build`/`cargo test` run in CI (PR #5, green).
 
+### D-010 — `docs/TASKS.md` T-003 and `docs/CONTRACTS.md` §3 disagree with themselves on whether `launch_history` cascades from `models`
+- Type: ambiguity (a three-way contradiction inside the spec itself, not reality-vs-documents)
+- Found in: T-003, pre-implementation review
+- Evidence: `docs/TASKS.md` T-003's acceptance text reads, in the same paragraph: "`launch_history` and `retained_model_settings` survive deletion of the corresponding `models` row, asserted directly — they are keyed by path and carry no foreign key (`PLAN.md` §2.9)" and then, two sentences later: "A test asserts `foreign_keys` is on and that deleting a model cascades its `launch_history` rows." A row cannot both survive a delete and be removed by it. Separately, `docs/CONTRACTS.md` §3's own intro line — "the `REFERENCES` clause below is decorative without [`PRAGMA foreign_keys = ON`]" — implies the schema contains a `REFERENCES` clause; none of the seven `CREATE TABLE` statements transcribed in that section has one. `CONTRACTS.md`'s own design commentary two paragraphs later ("Removal is not amnesia", citing `PLAN.md` §2.9) is unambiguous and comes with a stated rationale: `launch_history` and `retained_model_settings` are keyed by absolute path with no foreign key to `models`, specifically so that removing and re-adding a model costs nothing more than the import — this is why per-model enable/disable was dropped.
+- Affects: `docs/CONTRACTS.md` §3 (`launch_history`, `retained_model_settings`, and its intro line), `docs/TASKS.md` T-003's acceptance text, the `launch_history` schema and its tests
+- Proposed: retype both the "cascades" sentence in `docs/TASKS.md` T-003 and the "`REFERENCES` clause below" line in `docs/CONTRACTS.md` §3 to match the no-FK design that has a stated rationale behind it — they read like they belong to an earlier draft that predated "Removal is not amnesia". No table in this schema needs a `REFERENCES` clause pointing at `models` to satisfy anything else in T-003.
+- Status: open
+
+This PR implements against `docs/CONTRACTS.md`'s explicit design reasoning (no foreign key, rows survive deletion of the `models` row) — the one instance in this contradiction with a stated rationale rather than a bare assertion. `launch_history` and `retained_model_settings` therefore carry no `FOREIGN KEY` to `models`, and the T-003 test suite asserts the "survives deletion" half of the acceptance text directly. The "cascade" half is deliberately not implemented and not tested as a cascade; treating that sentence as stale is this PR's working assumption, not a decision — it is recorded here per `AGENTS.md`'s working method and left `open` for the project owner, the same pattern as D-004.
+
 <!-- Format:
 ### D-00x — <one-line summary>
 - Type: discrepancy | ambiguity
@@ -207,6 +225,7 @@ Gathered from documentation and upstream discussions during the v6.1 review, **n
   - Source: `github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md`
 
 - **Adding a model requires a server restart.** Consistent with the no-hot-reload decision already in `docs/CONTRACTS.md` §2; noted because it means the restart banner is not a self-imposed limitation.
+
 
 <!-- Required entries, by the task that produces them:
 - T-023: RuntimeBuild.registration_channel for the pinned build — PresetDeclaresPath | ScanOnly | Undetermined. T-033 branches on this and must not start without it.
