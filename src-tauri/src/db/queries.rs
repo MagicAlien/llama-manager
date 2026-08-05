@@ -80,7 +80,22 @@ pub struct ModelRow {
 // `model_row_to_struct` share this exact shape, so one definition also
 // keeps them from silently drifting apart.
 type ModelRowTuple = (
-    String, String, String, String, String, i64, String, String, String, String, String, String, i64, i64, String, Option<String>,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+    Option<String>,
 );
 
 fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRowTuple> {
@@ -235,7 +250,13 @@ pub fn get_watched_folder(
     conn.query_row(
         "SELECT path, added_at, last_scan_at FROM watched_folders WHERE path = ?1",
         params![path],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)),
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
+        },
     )
     .optional()
     .map_err(db_err)?
@@ -249,13 +270,19 @@ pub fn get_watched_folder(
     .transpose()
 }
 
-pub fn list_watched_folders(conn: &rusqlite::Connection) -> Result<Vec<WatchedFolderRow>, AppError> {
+pub fn list_watched_folders(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<WatchedFolderRow>, AppError> {
     let mut stmt = conn
         .prepare("SELECT path, added_at, last_scan_at FROM watched_folders ORDER BY path")
         .map_err(db_err)?;
     let rows = stmt
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+            ))
         })
         .map_err(db_err)?
         .collect::<Result<Vec<_>, _>>()
@@ -339,7 +366,10 @@ fn runtime_row_from_tuple(
     t: (String, String, String, i64, String, String, String),
 ) -> Result<RuntimeRow, AppError> {
     let backend = t.1.parse::<Backend>().map_err(|e| AppError::Database {
-        message: format!("stored runtimes.backend {:?} does not round-trip: {e:?}", t.1),
+        message: format!(
+            "stored runtimes.backend {:?} does not round-trip: {e:?}",
+            t.1
+        ),
     })?;
     Ok(RuntimeRow {
         build_tag: t.0,
@@ -360,7 +390,8 @@ pub fn get_runtime(
     build_tag: &str,
     backend: &Backend,
 ) -> Result<Option<RuntimeRow>, AppError> {
-    let sql = format!("SELECT {RUNTIME_COLUMNS} FROM runtimes WHERE build_tag = ?1 AND backend = ?2");
+    let sql =
+        format!("SELECT {RUNTIME_COLUMNS} FROM runtimes WHERE build_tag = ?1 AND backend = ?2");
     let found = conn
         .query_row(&sql, params![build_tag, backend.to_string()], |r| {
             Ok((
@@ -452,15 +483,19 @@ pub fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Resul
 }
 
 pub fn get_setting(conn: &rusqlite::Connection, key: &str) -> Result<Option<String>, AppError> {
-    conn.query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| {
-        r.get::<_, String>(0)
-    })
+    conn.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        params![key],
+        |r| r.get::<_, String>(0),
+    )
     .optional()
     .map_err(db_err)
 }
 
 pub fn list_settings(conn: &rusqlite::Connection) -> Result<Vec<(String, String)>, AppError> {
-    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key").map_err(db_err)?;
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM settings ORDER BY key")
+        .map_err(db_err)?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
         .map_err(db_err)?
@@ -506,7 +541,16 @@ const LAUNCH_HISTORY_COLUMNS: &str =
 // Same rationale as `ModelRowTuple` above: a named type instead of an
 // `#[allow(clippy::type_complexity)]` suppression, shared by both
 // functions that need this exact shape.
-type LaunchHistoryTuple = (i64, String, String, String, i64, Option<i64>, Option<f64>, Option<String>);
+type LaunchHistoryTuple = (
+    i64,
+    String,
+    String,
+    String,
+    i64,
+    Option<i64>,
+    Option<f64>,
+    Option<String>,
+);
 
 fn launch_history_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchHistoryTuple> {
     Ok((
@@ -559,7 +603,10 @@ pub fn insert_launch_record(
     Ok(conn.last_insert_rowid())
 }
 
-pub fn get_launch_record(conn: &rusqlite::Connection, id: i64) -> Result<Option<LaunchHistoryRow>, AppError> {
+pub fn get_launch_record(
+    conn: &rusqlite::Connection,
+    id: i64,
+) -> Result<Option<LaunchHistoryRow>, AppError> {
     let sql = format!("SELECT {LAUNCH_HISTORY_COLUMNS} FROM launch_history WHERE id = ?1");
     let found = conn
         .query_row(&sql, params![id], launch_history_from_row)
@@ -597,7 +644,13 @@ pub fn update_launch_record_outcome(
         .execute(
             "UPDATE launch_history SET succeeded = ?1, actual_vram_bytes = ?2, load_seconds = ?3, \
              error_message = ?4 WHERE id = ?5",
-            params![bool_to_i64(succeeded), actual_vram_bytes, load_seconds, error_message, id],
+            params![
+                bool_to_i64(succeeded),
+                actual_vram_bytes,
+                load_seconds,
+                error_message,
+                id
+            ],
         )
         .map_err(db_err)?;
     if changed == 0 {
@@ -618,7 +671,10 @@ pub fn delete_launch_record(conn: &rusqlite::Connection, id: i64) -> Result<(), 
 /// test asserting these rows survive deletion of the `models` row they
 /// happen to share a path with — there being no foreign key is exactly
 /// what makes this query still return them afterward.
-pub fn count_launch_history_for_path(conn: &rusqlite::Connection, file_path: &str) -> Result<i64, AppError> {
+pub fn count_launch_history_for_path(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> Result<i64, AppError> {
     conn.query_row(
         "SELECT count(*) FROM launch_history WHERE file_path = ?1",
         params![file_path],
@@ -690,20 +746,25 @@ pub fn get_retained_model_settings(
     )
     .optional()
     .map_err(db_err)?
-    .map(|(file_path, launch_params_json, sampling_json, preload, pinned, retained_at)| {
-        Ok(RetainedModelSettingsRow {
-            file_path,
-            launch_params_json,
-            sampling_json,
-            preload: i64_to_bool(preload),
-            pinned: i64_to_bool(pinned),
-            retained_at: parse_ts(&retained_at)?,
-        })
-    })
+    .map(
+        |(file_path, launch_params_json, sampling_json, preload, pinned, retained_at)| {
+            Ok(RetainedModelSettingsRow {
+                file_path,
+                launch_params_json,
+                sampling_json,
+                preload: i64_to_bool(preload),
+                pinned: i64_to_bool(pinned),
+                retained_at: parse_ts(&retained_at)?,
+            })
+        },
+    )
     .transpose()
 }
 
-pub fn delete_retained_model_settings(conn: &rusqlite::Connection, file_path: &str) -> Result<(), AppError> {
+pub fn delete_retained_model_settings(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM retained_model_settings WHERE file_path = ?1",
         params![file_path],
@@ -798,7 +859,10 @@ mod tests {
             file_path: "D:/models/a.gguf".into(),
             ..sample_model("m2", "D:/models/a.gguf")
         };
-        assert!(insert_model(&c, &dup_path).is_err(), "duplicate file_path must be rejected");
+        assert!(
+            insert_model(&c, &dup_path).is_err(),
+            "duplicate file_path must be rejected"
+        );
     }
 
     // ─── watched_folders CRUD ───────────────────────────────────
@@ -837,7 +901,10 @@ mod tests {
             let parsed: Backend = compact.parse().unwrap_or_else(|e| {
                 panic!("Backend {backend:?} -> {compact:?} failed to parse back: {e:?}")
             });
-            assert_eq!(parsed, backend, "round trip must recover the original value");
+            assert_eq!(
+                parsed, backend,
+                "round trip must recover the original value"
+            );
         }
         assert_eq!(Backend::Cuda { major: 13 }.to_string(), "cuda:13");
         assert_eq!(Backend::Vulkan.to_string(), "vulkan");
@@ -876,7 +943,12 @@ mod tests {
         assert_eq!(list_runtimes(&c).unwrap().len(), 1);
 
         set_runtime_active(&c, "b9196", &r.backend, true).unwrap();
-        assert!(get_runtime(&c, "b9196", &r.backend).unwrap().unwrap().is_active);
+        assert!(
+            get_runtime(&c, "b9196", &r.backend)
+                .unwrap()
+                .unwrap()
+                .is_active
+        );
 
         delete_runtime(&c, "b9196", &r.backend).unwrap();
         assert!(get_runtime(&c, "b9196", &r.backend).unwrap().is_none());
@@ -885,7 +957,11 @@ mod tests {
     #[test]
     fn a_second_active_runtime_is_rejected_by_the_unique_index_not_application_code() {
         let c = conn();
-        insert_runtime(&c, &sample_runtime("b9196", Backend::Cuda { major: 13 }, true)).unwrap();
+        insert_runtime(
+            &c,
+            &sample_runtime("b9196", Backend::Cuda { major: 13 }, true),
+        )
+        .unwrap();
 
         // A different (build_tag, backend) key, also active: must be
         // rejected by idx_runtimes_single_active at INSERT time.
@@ -922,7 +998,10 @@ mod tests {
 
         set_setting(&c, "theme", "light").unwrap(); // update (upsert)
         assert_eq!(get_setting(&c, "theme").unwrap().unwrap(), "light");
-        assert_eq!(list_settings(&c).unwrap(), vec![("theme".to_string(), "light".to_string())]);
+        assert_eq!(
+            list_settings(&c).unwrap(),
+            vec![("theme".to_string(), "light".to_string())]
+        );
 
         delete_setting(&c, "theme").unwrap();
         assert!(get_setting(&c, "theme").unwrap().is_none());
@@ -951,8 +1030,16 @@ mod tests {
         assert_eq!(fetched.file_path, "D:/models/a.gguf");
         assert!(fetched.succeeded);
 
-        assert_eq!(list_launch_history_for_path(&c, "D:/models/a.gguf").unwrap().len(), 1);
-        assert_eq!(count_launch_history_for_path(&c, "D:/models/a.gguf").unwrap(), 1);
+        assert_eq!(
+            list_launch_history_for_path(&c, "D:/models/a.gguf")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            count_launch_history_for_path(&c, "D:/models/a.gguf").unwrap(),
+            1
+        );
 
         update_launch_record_outcome(&c, id, false, None, None, Some("port in use")).unwrap();
         let updated = get_launch_record(&c, id).unwrap().unwrap();
@@ -970,9 +1057,30 @@ mod tests {
     #[test]
     fn launch_history_orders_newest_first() {
         let c = conn();
-        insert_launch_record(&c, &NewLaunchRecord { launched_at: ts(2026, 8, 1), ..sample_launch_record("D:/m.gguf") }).unwrap();
-        insert_launch_record(&c, &NewLaunchRecord { launched_at: ts(2026, 8, 3), ..sample_launch_record("D:/m.gguf") }).unwrap();
-        insert_launch_record(&c, &NewLaunchRecord { launched_at: ts(2026, 8, 2), ..sample_launch_record("D:/m.gguf") }).unwrap();
+        insert_launch_record(
+            &c,
+            &NewLaunchRecord {
+                launched_at: ts(2026, 8, 1),
+                ..sample_launch_record("D:/m.gguf")
+            },
+        )
+        .unwrap();
+        insert_launch_record(
+            &c,
+            &NewLaunchRecord {
+                launched_at: ts(2026, 8, 3),
+                ..sample_launch_record("D:/m.gguf")
+            },
+        )
+        .unwrap();
+        insert_launch_record(
+            &c,
+            &NewLaunchRecord {
+                launched_at: ts(2026, 8, 2),
+                ..sample_launch_record("D:/m.gguf")
+            },
+        )
+        .unwrap();
 
         let rows = list_launch_history_for_path(&c, "D:/m.gguf").unwrap();
         let dates: Vec<_> = rows.iter().map(|r| r.launched_at).collect();
@@ -998,7 +1106,12 @@ mod tests {
         let row = sample_retained("D:/models/a.gguf");
 
         upsert_retained_model_settings(&c, &row).unwrap(); // create
-        assert_eq!(get_retained_model_settings(&c, "D:/models/a.gguf").unwrap().unwrap(), row);
+        assert_eq!(
+            get_retained_model_settings(&c, "D:/models/a.gguf")
+                .unwrap()
+                .unwrap(),
+            row
+        );
 
         let updated_row = RetainedModelSettingsRow {
             pinned: true,
@@ -1006,12 +1119,16 @@ mod tests {
             ..row.clone()
         };
         upsert_retained_model_settings(&c, &updated_row).unwrap(); // update (upsert)
-        let fetched = get_retained_model_settings(&c, "D:/models/a.gguf").unwrap().unwrap();
+        let fetched = get_retained_model_settings(&c, "D:/models/a.gguf")
+            .unwrap()
+            .unwrap();
         assert!(fetched.pinned);
         assert_eq!(fetched.retained_at, ts(2026, 8, 2));
 
         delete_retained_model_settings(&c, "D:/models/a.gguf").unwrap();
-        assert!(get_retained_model_settings(&c, "D:/models/a.gguf").unwrap().is_none());
+        assert!(get_retained_model_settings(&c, "D:/models/a.gguf")
+            .unwrap()
+            .is_none());
     }
 
     // ─── schema_version ─────────────────────────────────────────
@@ -1031,10 +1148,15 @@ mod tests {
             )
             .expect_err("a second schema_version row must be rejected");
         let msg = err.to_string().to_lowercase();
-        assert!(msg.contains("check"), "expected a CHECK constraint violation, got: {msg}");
+        assert!(
+            msg.contains("check"),
+            "expected a CHECK constraint violation, got: {msg}"
+        );
 
         // Still exactly one row.
-        let count: i64 = c.query_row("SELECT count(*) FROM schema_version", [], |r| r.get(0)).unwrap();
+        let count: i64 = c
+            .query_row("SELECT count(*) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1043,7 +1165,9 @@ mod tests {
     #[test]
     fn foreign_keys_pragma_is_on() {
         let c = conn();
-        let value: i64 = c.pragma_query_value(None, "foreign_keys", |r| r.get(0)).unwrap();
+        let value: i64 = c
+            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
+            .unwrap();
         assert_eq!(value, 1);
     }
 
@@ -1070,7 +1194,10 @@ mod tests {
 
         delete_model(&c, "m1").unwrap();
 
-        assert!(get_model(&c, "m1").unwrap().is_none(), "model row itself is gone");
+        assert!(
+            get_model(&c, "m1").unwrap().is_none(),
+            "model row itself is gone"
+        );
         assert_eq!(
             count_launch_history_for_path(&c, path).unwrap(),
             1,

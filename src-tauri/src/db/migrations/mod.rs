@@ -60,9 +60,11 @@ fn recorded_version(conn: &Connection) -> Result<Option<u32>, AppError> {
     if !schema_version_table_exists(conn)? {
         return Ok(None);
     }
-    conn.query_row("SELECT version FROM schema_version WHERE id = 1", [], |row| {
-        row.get::<_, i64>(0)
-    })
+    conn.query_row(
+        "SELECT version FROM schema_version WHERE id = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
     .optional()
     .map(|v| v.map(|v| v as u32))
     .map_err(db_err)
@@ -72,7 +74,12 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn apply_migration(conn: &Connection, version: u32, sql: &str, first: bool) -> Result<(), AppError> {
+fn apply_migration(
+    conn: &Connection,
+    version: u32,
+    sql: &str,
+    first: bool,
+) -> Result<(), AppError> {
     conn.execute_batch(sql).map_err(db_err)?;
     if first {
         conn.execute(
@@ -202,7 +209,10 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(version, 99, "must not rewrite the version it refused to run against");
+        assert_eq!(
+            version, 99,
+            "must not rewrite the version it refused to run against"
+        );
     }
 
     #[test]
