@@ -115,6 +115,21 @@ jobs:
             exit 1
           }
 
+      # Uploaded unconditionally, not just on failure: this is the byte-exact
+      # output of the real generator on the real toolchain, which is worth
+      # having on hand even on a green run. It exists specifically because a
+      # pasted `git diff` in a chat log has already twice failed to convey
+      # exact whitespace (trailing spaces, line endings) accurately enough
+      # to reproduce by hand — see PROGRESS.md, T-002. Download this
+      # artifact and use it directly instead of re-deriving it from a diff.
+      - name: Upload generated src/lib/types.ts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-types-ts
+          path: src/lib/types.ts
+          retention-days: 14
+
       - name: npm run lint
         run: npm run lint
 
