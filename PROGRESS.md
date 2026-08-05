@@ -11,19 +11,23 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 5 August 2026 — T-000 (PR #3) and T-001 (PR #4) merged into `main`. T-002 (Type generation) is **Done**, PR #5, all CI gates green in 6 m on a real run (real toolchain, real `cargo test` — including the 14 round-trip tests). D-004 and D-005 remain open, owner decisions, not touched. D-007, D-008, D-009 raised and resolved within T-002 (same pattern as D-006 in T-001), all now confirmed correct by the green build. Take T-003 next.
+Last updated: 5 August 2026 — T-000 (PR #3), T-001 (PR #4) and T-002 (PR #5) all merged into `main`. **T-003 (Database layer) is In progress**, branch `t-003-database-layer`: schema, migration runner and `db/queries.rs` CRUD written with tests for every acceptance criterion, but not yet confirmed passing — this session had no local Rust toolchain (same constraint as T-001/T-002) *and*, new this session, no push access to `MagicAlien/llama-manager` (anonymous clone only), so nothing has run against a real `cargo test` yet and no PR is open. D-004 and D-005 remain open, owner decisions, not touched. D-010 raised in this session's pre-implementation review (see Discrepancies) — a genuine contradiction inside T-003's own spec, not something this session introduced.
 
 ---
 
 ## In progress
 
-*(nothing — T-002 is Done, PR #5, merged pending owner's final click. Take T-003 next.)*
+- **T-003 — Database layer** `[dep: T-001]`, branch `t-003-database-layer`.
+  - Done this session: `src-tauri/src/db/migrations/0001_init.sql` (`docs/CONTRACTS.md` §3 schema, transcribed verbatim — no `FOREIGN KEY` on `launch_history` / `retained_model_settings`, per D-010's resolution below); `db/migrations/mod.rs` (forward-only runner: idempotent on fresh and already-migrated databases, `AppError::SchemaTooNew` on a too-new recorded version, never migrates backward); `db/queries.rs` (CRUD for all six data tables plus a read-only `get_schema_version`); `Backend::Display`/`FromStr` added to `core/types.rs` (compact `'cuda:13'`/`'vulkan'`/`'cpu'` form for the `runtimes.backend` column, distinct from the serde-tagged JSON form). `rusqlite` (`bundled`) added to `src-tauri/Cargo.toml` per `PLAN.md` §3 — not re-justified, no other driver added. Tests written for every acceptance criterion in `docs/TASKS.md` T-003, including the unique-active-runtime index, the `schema_version` `CHECK (id = 1)` constraint, the `foreign_keys` pragma, and the Backend round-trip.
+  - **Not yet confirmed.** This session had no local Rust toolchain (same as T-001 and T-002) and, unlike those sessions, also had no push access to `MagicAlien/llama-manager` — the repo was cloned anonymously over HTTPS with no credential, so nothing could be pushed and no PR opened. Every test above is written but **none has been run against a real `cargo test`.** The next session (or the owner, directly) needs to: pull branch `t-003-database-layer`, run the local gate from `docs/DEV-SETUP.md`, and report back real output — `cargo fmt --check`, `cargo build`, `cargo clippy -- -D warnings`, `cargo test`. `src-tauri/Cargo.lock` also needs regenerating for real (it does not yet list `rusqlite` or its transitive deps — same situation T-001's note flagged for its own Cargo.lock).
+  - D-010 (new, see Discrepancies) recorded and left open before writing any schema code: `docs/TASKS.md` T-003's acceptance text contradicts itself on whether `launch_history` cascades from `models`, and `docs/CONTRACTS.md` §3's intro line implies a `REFERENCES` clause that isn't in the transcribed schema. Implemented against `CONTRACTS.md`'s own stated design rationale ("Removal is not amnesia" — no FK, rows survive). The "cascade" half of T-003's acceptance text is not implemented and not tested as a cascade.
+  - T-003 is **not** moved to Done in this entry — per `docs/WORKFLOW.md` §4, that happens once a test run (not this session's guess) actually confirms it passing, matching T-001/T-002's own precedent of only closing on real evidence.
 
 ---
 
 ## Next up
 
-**T-003 — Database layer** `[dep: T-001]`. Take it once T-002 is Done (T-003 does not depend on T-002, but T-002 is lower-numbered and unblocked, so the selection rule puts it first).
+Nothing selected — T-003 is in progress and `docs/WORKFLOW.md` §5 is clear that a second task does not start before the current one closes. Once T-003 is confirmed and closed, the selection rule (below) picks the next one.
 
 Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
 
@@ -141,6 +145,16 @@ Things where reality differs from the documents, or where a task is ambiguous. *
 - Proposed: add `PartialEq` to both derive lists — mechanical, single reading, no design question involved (unlike D-004/D-005, which are genuinely the owner's to arbitrate). Applied directly in `core/types.rs`, following the precedent D-006 set in T-001 for a fix that belongs in the code being written, not in a document-only correction task.
 - Status: resolved in T-002. `FlashAttn` and `AppError` both gained `PartialEq` in `core/types.rs`, confirmed compiling by a real `cargo build`/`cargo test` run in CI (PR #5, green).
 
+### D-010 — `docs/TASKS.md` T-003 and `docs/CONTRACTS.md` §3 disagree with themselves on whether `launch_history` cascades from `models`
+- Type: ambiguity (a three-way contradiction inside the spec itself, not reality-vs-documents)
+- Found in: T-003, pre-implementation review
+- Evidence: `docs/TASKS.md` T-003's acceptance text reads, in the same paragraph: "`launch_history` and `retained_model_settings` survive deletion of the corresponding `models` row, asserted directly — they are keyed by path and carry no foreign key (`PLAN.md` §2.9)" and then, two sentences later: "A test asserts `foreign_keys` is on and that deleting a model cascades its `launch_history` rows." A row cannot both survive a delete and be removed by it. Separately, `docs/CONTRACTS.md` §3's own intro line — "the `REFERENCES` clause below is decorative without [`PRAGMA foreign_keys = ON`]" — implies the schema contains a `REFERENCES` clause; none of the seven `CREATE TABLE` statements transcribed in that section has one. `CONTRACTS.md`'s own design commentary two paragraphs later ("Removal is not amnesia", citing `PLAN.md` §2.9) is unambiguous and comes with a stated rationale: `launch_history` and `retained_model_settings` are keyed by absolute path with no foreign key to `models`, specifically so that removing and re-adding a model costs nothing more than the import — this is why per-model enable/disable was dropped.
+- Affects: `docs/CONTRACTS.md` §3 (`launch_history`, `retained_model_settings`, and its intro line), `docs/TASKS.md` T-003's acceptance text, the `launch_history` schema and its tests
+- Proposed: retype both the "cascades" sentence in `docs/TASKS.md` T-003 and the "`REFERENCES` clause below" line in `docs/CONTRACTS.md` §3 to match the no-FK design that has a stated rationale behind it — they read like they belong to an earlier draft that predated "Removal is not amnesia". No table in this schema needs a `REFERENCES` clause pointing at `models` to satisfy anything else in T-003.
+- Status: open
+
+This PR implements against `docs/CONTRACTS.md`'s explicit design reasoning (no foreign key, rows survive deletion of the `models` row) — the one instance in this contradiction with a stated rationale rather than a bare assertion. `launch_history` and `retained_model_settings` therefore carry no `FOREIGN KEY` to `models`, and the T-003 test suite asserts the "survives deletion" half of the acceptance text directly. The "cascade" half is deliberately not implemented and not tested as a cascade; treating that sentence as stale is this PR's working assumption, not a decision — it is recorded here per `AGENTS.md`'s working method and left `open` for the project owner, the same pattern as D-004.
+
 <!-- Format:
 ### D-00x — <one-line summary>
 - Type: discrepancy | ambiguity
@@ -207,6 +221,7 @@ Gathered from documentation and upstream discussions during the v6.1 review, **n
   - Source: `github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md`
 
 - **Adding a model requires a server restart.** Consistent with the no-hot-reload decision already in `docs/CONTRACTS.md` §2; noted because it means the restart banner is not a self-imposed limitation.
+
 
 <!-- Required entries, by the task that produces them:
 - T-023: RuntimeBuild.registration_channel for the pinned build — PresetDeclaresPath | ScanOnly | Undetermined. T-033 branches on this and must not start without it.

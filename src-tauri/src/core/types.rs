@@ -89,6 +89,49 @@ pub enum Backend {
     Cpu,
 }
 
+/// The compact form `db/queries.rs` (T-003) stores in `runtimes.backend` —
+/// `'cuda:13'`, `'vulkan'`, `'cpu'` — deliberately not the serde-tagged JSON
+/// form (`{"kind":"Cuda","major":13}`) the derive above produces. `backend`
+/// is half of `runtimes`' composite primary key (`docs/CONTRACTS.md` §3), so
+/// it has to be short and stable in a way a JSON blob embedded in a TEXT
+/// column is not. Round-trip (`Display` then `FromStr` recovers the same
+/// value) is asserted in T-003, not here — this impl has no test of its own
+/// in this file so there is exactly one place that owns "does this round
+/// trip", not two that could drift apart.
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Backend::Cuda { major } => write!(f, "cuda:{major}"),
+            Backend::Vulkan => write!(f, "vulkan"),
+            Backend::Cpu => write!(f, "cpu"),
+        }
+    }
+}
+
+/// Returned by [`Backend`]'s [`std::str::FromStr`] impl when a stored
+/// `runtimes.backend` value is not one this binary's `Display` impl could
+/// have produced — a hand-edited database, or a value written by a build
+/// that understood a `Backend` variant this one does not.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid backend string: {0:?}")]
+pub struct ParseBackendError(pub String);
+
+impl std::str::FromStr for Backend {
+    type Err = ParseBackendError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "vulkan" => Ok(Backend::Vulkan),
+            "cpu" => Ok(Backend::Cpu),
+            _ => s
+                .strip_prefix("cuda:")
+                .and_then(|major| major.parse::<u8>().ok())
+                .map(|major| Backend::Cuda { major })
+                .ok_or_else(|| ParseBackendError(s.to_string())),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export)]
 pub enum CheckStatus {
