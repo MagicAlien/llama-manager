@@ -33,6 +33,8 @@ What's in the branch: `src-tauri/src/core/types.rs` transcribes every type in `d
 
 `cargo build`/`cargo clippy`/`cargo test` (the full suite, including the 14 round-trip tests) are still unconfirmed by a run that actually executes them — `export_bindings` filtered them out. Re-run confirms.
 
+**Update:** owner ran `npm run generate-types` again after the `JsonValue` fix — still 39/39 `export_bindings_*` passing, confirming that fix held. One cosmetic diff left: a blank line after every `// ---- TypeName ----` header that the real script output doesn't have (this session's script logic never produced one; the committed file still had one from an earlier hand-transcription pass that predates the script existing in its current form). Removed — 39 blank lines gone, one per section, matching the diff exactly. No script change needed this time; the script's own output was already correct, only the committed file had drifted from it. `src/lib/types.ts` should now be a byte-for-byte match; `cargo build`/`clippy`/`test` (full suite) still the only unconfirmed pieces.
+
 > One task at a time. If something is listed here, it is yours: check out its branch and continue it. Do not start a new task.
 
 ---

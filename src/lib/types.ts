@@ -6,7 +6,6 @@
 // this file is generated, never hand-edited. CI fails if it is stale.
 
 // ---- AppError ----
-
 /**
  * Full behaviour (`code()`, `message()`, `remediation()`) defined in T-004.
  * Every IPC command returns `Result<T, AppError>`.
@@ -14,7 +13,6 @@
 export type AppError = { "kind": "InvalidTransition", "detail": { from: string, command: string, } } | { "kind": "NotFound", "detail": { what: string, } } | { "kind": "Io", "detail": { message: string, } } | { "kind": "Database", "detail": { message: string, } } | { "kind": "Network", "detail": { message: string, } } | { "kind": "RateLimited", "detail": { retry_after_seconds: bigint, } } | { "kind": "ChecksumMismatch", "detail": { expected: string, actual: string, } } | { "kind": "UnsafeArchiveEntry", "detail": { entry: string, } } | { "kind": "InvalidPath", "detail": { path: string, reason: string, } } | { "kind": "GgufParse", "detail": { message: string, } } | { "kind": "PortInUse", "detail": { port: number, } } | { "kind": "UpstreamUnavailable", "detail": { state: string, } } | { "kind": "Unauthorized" } | { "kind": "SchemaTooNew", "detail": { found: number, known: number, } } | { "kind": "Internal", "detail": { message: string, } };
 
 // ---- AppSettings ----
-
 export type AppSettings = {
 /**
  * "dark" | "light" | "system"
@@ -26,7 +24,6 @@ theme: string, launch_at_startup: boolean, default_picker_folder: string | null,
 auto_update_policy: string, log_retention_days: number, };
 
 // ---- AvailableRelease ----
-
 export type AvailableRelease = { build_tag: string, backend: Backend, asset_name: string, asset_url: string,
 /**
  * `None` when the release omits checksums.
@@ -34,7 +31,6 @@ export type AvailableRelease = { build_tag: string, backend: Backend, asset_name
 sha256: string | null, size_bytes: bigint, published_at: string, release_notes_url: string, };
 
 // ---- Backend ----
-
 /**
  * Open on purpose: a CUDA major the binary has never heard of must be
  * representable, not a parse failure. See `PLAN.md` §2.13.
@@ -42,15 +38,12 @@ sha256: string | null, size_bytes: bigint, published_at: string, release_notes_u
 export type Backend = { "kind": "Cuda", major: number, } | { "kind": "Vulkan" } | { "kind": "Cpu" };
 
 // ---- CheckStatus ----
-
 export type CheckStatus = "Pass" | "Warn" | "Fail";
 
 // ---- Compatibility ----
-
 export type Compatibility = "Supported" | { "SupportedWithWarnings": Array<CompatibilityNote> } | { "Unsupported": string };
 
 // ---- CompatibilityNote ----
-
 export type CompatibilityNote = { text: string,
 /**
  * NVFP4 sets this; see `PLAN.md` §2.6.
@@ -58,7 +51,6 @@ export type CompatibilityNote = { text: string,
 experimental: boolean, };
 
 // ---- Diagnosis ----
-
 export type Diagnosis = {
 /**
  * "cuda_dll_missing" | "oom_vram" | "port_in_use" | ...
@@ -66,7 +58,6 @@ export type Diagnosis = {
 code: string, message: string, remediation: string, };
 
 // ---- EndpointState ----
-
 /**
  * The listener's lifecycle is independent of `ServerState` — that
  * independence is the point of `PLAN.md` §2.7. The endpoint stays bound
@@ -76,19 +67,15 @@ code: string, message: string, remediation: string, };
 export type EndpointState = "Unbound" | { "Bound": { address: string, port: number, } } | { "BindFailed": { address: string, port: number, error: AppError, } };
 
 // ---- EnvironmentReport ----
-
 export type EnvironmentReport = { gpus: Array<GpuInfo>, system_ram_bytes: bigint, free_disk_bytes: bigint, os_build: string, checks: Array<HealthCheck>, };
 
 // ---- EstimateConfidence ----
-
 export type EstimateConfidence = "Calibrated" | "Heuristic";
 
 // ---- EstimateInputs ----
-
 export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, params: LaunchParams, vram_free_bytes: bigint, ram_free_bytes: bigint, };
 
 // ---- FlashAttn ----
-
 /**
  * Tri-state. Recent builds accept `on|off|auto` rather than a boolean.
  * VERIFY the type against `docs/verified-flags.md` before use.
@@ -96,7 +83,6 @@ export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, 
 export type FlashAttn = "On" | "Off" | "Auto";
 
 // ---- GgufMetadata ----
-
 export type GgufMetadata = {
 /**
  * "llama" | "qwen3" | "deepseek2" | ...
@@ -120,7 +106,6 @@ block_count: number, context_length: number | null, embedding_length: number | n
 attention_head_count: number | null, attention_head_count_kv: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, };
 
 // ---- GpuInfo ----
-
 export type GpuInfo = { index: number, name: string,
 /**
  * Blackwell = (12, 0) or (10, x).
@@ -128,11 +113,9 @@ export type GpuInfo = { index: number, name: string,
 compute_capability: [number, number], vram_total_bytes: bigint, vram_free_bytes: bigint, driver_version: string, cuda_version: string | null, };
 
 // ---- GpuTelemetry ----
-
 export type GpuTelemetry = { index: number, vram_used_bytes: bigint, vram_total_bytes: bigint, utilization_percent: number, temperature_c: number | null, };
 
 // ---- HealthCheck ----
-
 export type HealthCheck = {
 /**
  * "gpu_present" | "driver_ok" | "cuda13_ok" | "disk_space" | "endpoint_bindable"
@@ -140,15 +123,12 @@ export type HealthCheck = {
 id: string, status: CheckStatus, message: string, remediation: string | null, };
 
 // ---- ImportProgress ----
-
 export type ImportProgress = { "Queued": { job_id: string, total_files: number, } } | { "FileStarted": { job_id: string, path: string, index: number, total: number, } } | { "FileDone": { job_id: string, entry: ModelEntry, index: number, total: number, } } | { "FileFailed": { job_id: string, path: string, error: AppError, } } | { "Cancelled": { job_id: string, completed: number, } } | { "Finished": { job_id: string, imported: number, skipped: number, failed: number, } };
 
 // ---- InstallProgress ----
-
 export type InstallProgress = "Resolving" | { "Downloading": { received_bytes: bigint, total_bytes: bigint, bytes_per_sec: bigint, } } | "Verifying" | { "Extracting": { entries_done: number, entries_total: number, } } | "Registering" | { "Done": { build: RuntimeBuild, } } | { "Failed": { error: AppError, } };
 
 // ---- LaunchParams ----
-
 export type LaunchParams = { gpu_layers: number | null, ctx_size: number | null, batch_size: number | null, ubatch_size: number | null, flash_attn: FlashAttn | null, cache_type_k: string | null, cache_type_v: string | null, n_cpu_moe: number | null, tensor_split: Array<number> | null, main_gpu: number | null, no_mmap: boolean | null, mlock: boolean | null, threads: number | null, chat_template: string | null, mmproj_path: string | null,
 /**
  * Unvalidated passthrough. User-entered only — never set by app logic.
@@ -157,7 +137,6 @@ export type LaunchParams = { gpu_layers: number | null, ctx_size: number | null,
 extra_args: Array<string>, };
 
 // ---- LaunchRecord ----
-
 export type LaunchRecord = {
 /**
  * Absolute path, not the entry id: history outlives the catalogue entry.
@@ -165,7 +144,6 @@ export type LaunchRecord = {
 file_path: string, launched_at: string, params: LaunchParams, succeeded: boolean, actual_vram_bytes: bigint | null, load_seconds: number | null, };
 
 // ---- LinkCapability ----
-
 /**
  * What linking primitive this machine can actually use, established by
  * attempting one in a scratch directory rather than by reading a privilege.
@@ -176,15 +154,12 @@ file_path: string, launched_at: string, params: LaunchParams, succeeded: boolean
 export type LinkCapability = "Symlink" | "HardLinkOnly" | "None";
 
 // ---- LoadedModelState ----
-
 export type LoadedModelState = { model_id: string, state: ModelLoadState, vram_bytes: bigint | null, last_used: string | null, error: string | null, };
 
 // ---- ModelAvailability ----
-
 export type ModelAvailability = "Present" | "Missing" | "Unreadable";
 
 // ---- ModelEntry ----
-
 export type ModelEntry = {
 /**
  * Stable slug derived from the absolute path.
@@ -216,11 +191,9 @@ preload: boolean,
 pinned: boolean, added_at: string, };
 
 // ---- ModelLoadState ----
-
 export type ModelLoadState = "Registered" | "Loading" | "Loaded" | "Unloading" | "Failed";
 
 // ---- RegistrationChannel ----
-
 /**
  * How this build lets a model enter the router's registry.
  * Settled by parsing `--help` in T-023; see `PLAN.md` §2.1.
@@ -228,14 +201,12 @@ export type ModelLoadState = "Registered" | "Loading" | "Loaded" | "Unloading" |
 export type RegistrationChannel = "PresetDeclaresPath" | "ScanOnly" | "Undetermined";
 
 // ---- RequestLogEntry ----
-
 /**
  * Never contains a body, a header value, or the model name. See `PLAN.md` §6.
  */
 export type RequestLogEntry = { at: string, method: string, path: string, status: number, duration_ms: bigint, request_bytes: bigint, response_bytes: bigint, streamed: boolean, authenticated: boolean, };
 
 // ---- RetainedModelSettings ----
-
 /**
  * Survives removal of the catalogue entry, keyed by the model's absolute
  * path. Re-importing the same file restores it. See `PLAN.md` §2.9.
@@ -243,7 +214,6 @@ export type RequestLogEntry = { at: string, method: string, path: string, status
 export type RetainedModelSettings = { file_path: string, launch_params: LaunchParams, sampling_defaults: SamplingDefaults, preload: boolean, pinned: boolean, retained_at: string, };
 
 // ---- RuntimeBuild ----
-
 export type RuntimeBuild = {
 /**
  * "b9196"
@@ -251,11 +221,9 @@ export type RuntimeBuild = {
 build_tag: string, backend: Backend, install_path: string, is_active: boolean, installed_at: string, verified_flags: Array<VerifiedFlag>, registration_channel: RegistrationChannel, };
 
 // ---- SamplingDefaults ----
-
 export type SamplingDefaults = { temperature: number | null, top_p: number | null, top_k: number | null, min_p: number | null, repeat_penalty: number | null, presence_penalty: number | null, frequency_penalty: number | null, seed: bigint | null, };
 
 // ---- ServerConfig ----
-
 export type ServerConfig = {
 /**
  * The address clients configure. Owned by the app, stable across restarts.
@@ -324,7 +292,6 @@ request_log_enabled: boolean,
 max_concurrent_requests: number | null, };
 
 // ---- ServerProps ----
-
 export type ServerProps = { build_tag: string | null, models_max: number | null,
 /**
  * `/props` is not a stable contract; keep the original.
@@ -332,11 +299,9 @@ export type ServerProps = { build_tag: string | null, models_max: number | null,
 raw: unknown, };
 
 // ---- ServerState ----
-
 export type ServerState = "Stopped" | { "Starting": { since: string, upstream_port: number, phase: StartupPhase, } } | { "Running": { pid: number, upstream_port: number, since: string, config_dirty: boolean, } } | "Stopping" | { "Crashed": { exit_code: number | null, diagnosis: Diagnosis | null, last_log: Array<string>, } };
 
 // ---- StartupPhase ----
-
 /**
  * Startup has two phases with very different durations: the coordinator
  * answering takes seconds, preloading a 65 GB model takes minutes.
@@ -346,7 +311,6 @@ export type ServerState = "Stopped" | { "Starting": { since: string, upstream_po
 export type StartupPhase = "WaitingForProcess" | { "Preloading": { done: number, total: number, current: string | null, } };
 
 // ---- TelemetrySnapshot ----
-
 export type TelemetrySnapshot = { sampled_at: string, gpus: Array<GpuTelemetry>, loaded_models: Array<LoadedModelState>,
 /**
  * Counted at the app's listener. Available because the app owns the
@@ -359,7 +323,6 @@ active_requests: number, requests_last_minute: number,
 tokens_per_sec: number | null, uptime_seconds: bigint, };
 
 // ---- VerifiedFlag ----
-
 export type VerifiedFlag = {
 /**
  * "--flash-attn"
@@ -367,9 +330,7 @@ export type VerifiedFlag = {
 name: string, takes_value: boolean, allowed_values: Array<string> | null, };
 
 // ---- VramEstimate ----
-
 export type VramEstimate = { recommended_gpu_layers: number, estimated_vram_bytes: bigint, estimated_ram_bytes: bigint, kv_cache_bytes: bigint, fits_fully: boolean, confidence: EstimateConfidence, notes: Array<string>, };
 
 // ---- WatchedFolder ----
-
 export type WatchedFolder = { path: string, model_count: number, reachable: boolean, last_scan_at: string | null, };
