@@ -1,7 +1,10 @@
 // Entry point only. `AGENTS.md` invariant 1: `core/` and `ipc/` hold the
-// logic; neither exists yet (T-001 is the scaffold). This file wires
-// tracing and hands off to the Tauri runtime.
+// logic. `core/` exists as of T-002 (types only, so far); `ipc/` (the Tauri
+// command handlers) does not yet — nothing in `docs/CONTRACTS.md` §4 is
+// implemented until the task named in its "Implemented by" column runs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod core;
 
 use std::path::PathBuf;
 

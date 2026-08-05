@@ -11,21 +11,19 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 4 August 2026 — T-000 merged (PR #3, into `main`). T-001 (Scaffold) is **Done**, PR #4 open (all six CI gates green, warm run 6 m 17 s; `npm run tauri dev` confirmed opening a window and writing the log file on a real Windows machine). D-006 resolved. D-004 and D-005 remain open, owner decisions, not touched. Take T-002 once PR #4 merges.
+Last updated: 5 August 2026 — T-000 (PR #3) and T-001 (PR #4) merged into `main`. T-002 (Type generation) is **Done**, PR #5, all CI gates green in 6 m on a real run (real toolchain, real `cargo test` — including the 14 round-trip tests). D-004 and D-005 remain open, owner decisions, not touched. D-007, D-008, D-009 raised and resolved within T-002 (same pattern as D-006 in T-001), all now confirmed correct by the green build. Take T-003 next.
 
 ---
 
 ## In progress
 
-*(nothing — T-001 is Done; its PR #4 awaits merge. When it merges, take T-002.)*
-
-> One task at a time. If something is listed here, it is yours: check out its branch and continue it. Do not start a new task.
+*(nothing — T-002 is Done, PR #5, merged pending owner's final click. Take T-003 next.)*
 
 ---
 
 ## Next up
 
-**T-002 — Type generation** `[dep: T-001]`. Take it once PR #4 has merged.
+**T-003 — Database layer** `[dep: T-001]`. Take it once T-002 is Done (T-003 does not depend on T-002, but T-002 is lower-numbered and unblocked, so the selection rule puts it first).
 
 Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
 
@@ -48,6 +46,12 @@ Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies a
   - Note: One `cargo fmt` fixup needed after the first CI run (the `LOCALAPPDATA` `.map()` chain wanted wrapping) — applied the exact diff CI reported, second run green.
   - Note: This session had no Rust toolchain and no Windows/WebView2 machine; `cargo build/test/clippy/fmt` were verified by CI, and `npm run tauri dev` opening a window plus the log file at `%LOCALAPPDATA%\LlamaManager\logs\app.log` were verified by the project owner on a real Windows checkout — not by the agent directly. Worth knowing if a future session needs to distinguish agent-verified from owner-verified evidence in this entry's history.
   - Note: `src-tauri/Cargo.lock` was not committed by the agent (no toolchain/registry access to generate an accurate one); confirm it has been committed from a real `cargo build` (CI's or the owner's Windows run) before or as part of merging PR #4.
+
+- **T-002** — Type generation · PR #5 · 2026-08-05
+  - Note: Full `jobs.gates` green on a real run, 6 m — `cargo fmt --check`, `cargo build`, `cargo clippy -- -D warnings`, `cargo test` (all 14 enum round-trip tests, including `Backend::Cuda { major: 200 }` against a major the code has no branch for), `npm ci`, the `src/lib/types.ts` freshness check, `npm run lint`, `npm run test` all confirmed passing. `demo:failure` job correctly skipped — it only runs when a PR carries that label, which this one does not.
+  - Note: D-007 (`TS_RS_EXPORT_DIR` path resolution), D-008 (`chrono` dependency, justified per `AGENTS.md` §4), D-009 (`FlashAttn`/`AppError` missing `PartialEq`) all resolved and now confirmed correct by the green build, not just reasoned.
+  - Note: This session had no Rust toolchain; every fix after the initial push was applied against real CI output the owner relayed rather than guessed — `cargo fmt` diff, one `clippy::large_enum_variant` finding (`ImportProgress::FileDone`, fixed by boxing), and three rounds of `npm run generate-types` diffs before a byte-exact CI artifact settled `src/lib/types.ts` for good. F-002 records what the real run confirmed about `ts-rs`'s actual output (quoted tag keys, trailing commas, JSDoc from doc comments, the `serde-json-impl`/`JsonValue` dangling-reference bug worked around with `#[ts(type = "unknown")]`, and a trailing-space formatting detail that caused three rounds of false diffs before the real artifact was diffed byte for byte).
+  - Note: `src/lib/ipc.ts` hand-writes all 41 `docs/CONTRACTS.md` §4 commands against the generated types; its `no-restricted-syntax` lint rule was demonstrated red then green for real.
 
 ---
 
@@ -113,6 +117,30 @@ Things where reality differs from the documents, or where a task is ambiguous. *
 - Proposed: pin the action to the version the file pins (`dtolnay/rust-toolchain@1.88`) **and** add `components = ["clippy", "rustfmt"]` to `rust-toolchain.toml`, so the pin holds whichever of the two wins; then correct §194 to say the pipeline installs a pinned toolchain with components. Unlike D-004 and D-005 this is not a document-only fix, so it is not a `T-1xx`: both halves belong in T-001, which is the PR that creates the file that breaks it.
 - Status: resolved in T-001 (PR #4). Both halves landed: `dtolnay/rust-toolchain@1.88` pinned in both `ci.yml` jobs; `docs/DEV-SETUP.md` §194 corrected (`components = ["clippy", "rustfmt"]` was already present in §143's example, so that half needed no change). Demonstrated, not just asserted: PR #4's CI shows `cargo clippy -- -D warnings` and `cargo fmt --check` both green under the pin.
 
+### D-007 — `.cargo/config.toml`'s `TS_RS_EXPORT_DIR` would have resolved outside the repo
+- Type: discrepancy
+- Found in: `.cargo/config.toml` (T-001), T-002 pre-implementation review
+- Evidence: cargo's `[env]` table resolves a `relative = true` value against the directory containing the `.cargo/` folder that sets it — here, the repo root, since `.cargo/config.toml` sits at the root, not inside `src-tauri/` where `Cargo.toml` and every `cargo` invocation in `ci.yml` (`working-directory: src-tauri`) actually live. T-001's committed value, `"../src/lib"`, resolves from the repo root, one level above it — a sibling directory, not `src/lib`. (Cargo docs: https://doc.rust-lang.org/cargo/reference/config.html#env; ts-rs docs repeat the same rule.)
+- Affects: `.cargo/config.toml`, `src/lib/types.ts` generation
+- Proposed: point `TS_RS_EXPORT_DIR` at a scratch directory instead of `src/lib` directly — bundled with the export-mechanism decision recorded in F-002. Value changed to `src-tauri/target/ts-rs-bindings` (relative to the repo root, which resolves correctly under the same rule).
+- Status: resolved in T-002. Confirmed by a real `cargo test` run in CI (`jobs.gates`, PR #5, green) — the path resolution works as fixed.
+
+### D-008 — `chrono` is not in `PLAN.md` §3's approved crate list, but `docs/CONTRACTS.md` §1 requires it
+- Type: discrepancy
+- Found in: `PLAN.md` §3, T-002 pre-implementation review
+- Evidence: `PLAN.md` §3's "Approved Rust crates" line does not mention `chrono` or any alternative. `docs/CONTRACTS.md` §1 declares `DateTime<Utc>` on eleven fields across `RuntimeBuild`, `AvailableRelease`, `WatchedFolder`, `ModelEntry`, `RetainedModelSettings`, `LaunchRecord`, `TelemetrySnapshot`, `RequestLogEntry`, `LoadedModelState` and twice in `ServerState`. `DateTime<Utc>` is `chrono`'s type; there is no std equivalent.
+- Affects: `PLAN.md` §3, `src-tauri/Cargo.toml`
+- Proposed: `AGENTS.md` §4 already provides the path for exactly this case — "or be justified in the PR description" — so `chrono` (with the `serde` feature) was added to `src-tauri/Cargo.toml` and justified in this PR rather than treated as blocking. `ts-rs`'s `chrono-impl` Cargo feature was enabled alongside it, needed for `#[derive(TS)]` to know `DateTime<Utc>`. Whether `PLAN.md` §3's list itself should be amended so future PRs don't re-justify the same crate is the owner's call — worth a `T-1xx` if so, not done here (document correction, not code).
+- Status: resolved in T-002 (dependency added and justified per `AGENTS.md` §4); the `PLAN.md` §3 list itself is left as-is pending an owner decision on whether to amend it.
+
+### D-009 — Two of `docs/CONTRACTS.md` §1's shown derive lists don't compile as written
+- Type: discrepancy
+- Found in: `docs/CONTRACTS.md` §1, T-002 pre-implementation review
+- Evidence: `LaunchParams` derives `PartialEq` and has a field `flash_attn: Option<FlashAttn>`; `FlashAttn`'s shown derive list is `Serialize, Deserialize, Clone, Debug` — no `PartialEq`. `#[derive(PartialEq)]` on a struct requires every field's type to implement `PartialEq`; `Option<FlashAttn>: PartialEq` requires `FlashAttn: PartialEq`, which the shown code does not provide. The same problem recurs one section down: `EndpointState` derives `PartialEq` and its `BindFailed` variant carries `error: AppError`, but `AppError`'s shown derive list (`Serialize, Deserialize, Clone, Debug, thiserror::Error`) also omits `PartialEq`.
+- Affects: `docs/CONTRACTS.md` §1 (`FlashAttn`, `AppError`), `src-tauri/src/core/types.rs`
+- Proposed: add `PartialEq` to both derive lists — mechanical, single reading, no design question involved (unlike D-004/D-005, which are genuinely the owner's to arbitrate). Applied directly in `core/types.rs`, following the precedent D-006 set in T-001 for a fix that belongs in the code being written, not in a document-only correction task.
+- Status: resolved in T-002. `FlashAttn` and `AppError` both gained `PartialEq` in `core/types.rs`, confirmed compiling by a real `cargo build`/`cargo test` run in CI (PR #5, green).
+
 <!-- Format:
 ### D-00x — <one-line summary>
 - Type: discrepancy | ambiguity
@@ -131,6 +159,8 @@ Things where reality differs from the documents, or where a task is ambiguous. *
 
 Things noticed in passing that are not part of any current task — a rough edge, a probable future problem, a small bug outside your scope. Noted here rather than fixed, per `docs/WORKFLOW.md` §3.
 
+- **`(node:...) DEP0040` — Node's built-in `punycode` module is deprecated (T-002 CI logs).** Not ours: `npm why punycode` traces it to `eslint@9.39.5` → `@eslint/eslintrc` → `ajv@6.15.0` → `uri-js` (and separately `jsdom` → `whatwg-url` → `tr46`, already deduped to the same resolved version). `eslint` is already at the newest version inside its approved `^9.9.0` range (`PLAN.md` §3); the old `ajv` 6.x comes from eslint's own legacy-config compatibility layer, not from anything this project chose. A plain `require("punycode")` anywhere in that chain gets Node's deprecated built-in ahead of the real `punycode` npm package installed alongside it (also present, `2.3.1`) — that's the warning, not a version mismatch fixable from here. Harmless (warning only, nothing fails), and not fixable within this project without dropping or forking `eslint` or `jsdom`, so left alone rather than worked around.
+- **`Cache not found for input keys: Windows-npm-...` (T-002 CI logs) is expected, not a problem.** First run of `actions/cache` against this exact `package-lock.json` hash — nothing to restore yet, so `npm ci` ran cold. The cache saves at the end of this run and later runs against an unchanged lockfile will hit it.
 - **The endpoint listener is the project's most likely source of a silent regression.** Buffering an SSE stream produces correct-looking output in every test that compares concatenated bodies. T-042's chunk-boundary assertion is the only thing that catches it; if that test ever becomes flaky, fix it rather than relaxing it.
 - **Whether llama-server's `--models-dir` scan follows reparse points is unknown**, and `--help` will not answer it. The whole scan-only fallback depends on it. **This is T-025's question 2 as of v6.3**, not the owner's — running a CPU build against a directory of links needs no hardware.
 - **T-029's link half may be dead code, and only T-025 can say.** `link_into`, `unlink`, `link_capability` and `LinkCapability` serve the `ScanOnly` channel alone; `PLAN.md` §2.1 states that under `PresetDeclaresPath` that branch never runs, and F-000's preliminary evidence points that way. T-029 now depends on T-025 so the answer is known before the module is written, but **the decision of what to do with the answer is the owner's**: implement the full surface regardless (an unused function costs less than a missing one), or implement only what the confirmed channel needs and add the rest as a correction task if the channel ever changes. Default, absent a decision, is the first. Worth settling before Milestone C rather than during it.
@@ -154,6 +184,14 @@ Discoveries that later tasks depend on and that no document predicted. This is t
 GitHub Actions appends `exit $LASTEXITCODE` after every pwsh `run:` block. A step that deliberately runs a command expected to fail (e.g. `cargo clippy` on broken code) **fails the step even after a successful `$LASTEXITCODE` check**, unless the script ends with an explicit `exit 0`. Caught in the T-000 demo job (run 30928203565): the "Expect clippy to fail" step printed "clippy failed as expected (exit 101)" and then failed with exit code 1. **T-025's `scripts/probe-router.ps1` steps must end each probe with an explicit exit code** when a command is expected to fail.
 
 Also observed: `windows-latest` currently resolves to Windows Server 2025 (image `windows-2025-vs2026`, VS 2026 build tools preinstalled), and `actions/checkout@v4` triggers a Node-20 deprecation warning — it runs on Node 24.
+
+### F-002 — ts-rs 12.x: a shared `export_to` target does not produce one clean file; per-type files plus a collector does (T-002)
+
+`docs/adr/adr-001-type-generation.md` left this as T-002's open question. Reasoned from ts-rs's docs first, then **confirmed empirically**: a real `npm run generate-types` run (owner, real toolchain) produced all 39 per-type files and collected them into one `src/lib/types.ts` exactly as designed, no collisions, no missing types.
+
+ts-rs's own docs (https://docs.rs/ts-rs/12.0.0/ts_rs/) say `#[ts(export)]` generates one `#[test]` fn per type, each writing that type's binding to disk when `cargo test` runs. Directing several types at the same `#[ts(export_to = "...")]` path means several independent test functions — run by `cargo test`'s own parallel test harness, order and concurrency unspecified — writing to the same file; nothing in ts-rs's documented behavior claims these writes merge or serialize against each other. The default (no `export_to` override) writes one file per type, named after the type, which has no such collision because no two types share a target path. **T-002 uses the default and collects afterward** (`scripts/generate-types.mjs`): `TS_RS_EXPORT_DIR` points at a scratch directory (`src-tauri/target/ts-rs-bindings/`, see D-007), and the script concatenates every `*.ts` file there into `src/lib/types.ts`, stripping the self-referential `import type { X } from "./Y"` lines ts-rs emits for cross-type references — meaningless once everything shares one file.
+
+Also confirmed by the same run: `ts-rs` 12 without the `format` cargo feature emits unformatted, single-line-per-type output, matching the docs' own example — but *with* quoted object keys on every field (`{ "kind": "Cuda", major: number, }` — the tag key quoted, the rest not) and a trailing comma after every field, including nested inline objects; the first hand-transcribed version of this file got both wrong (unquoted tag keys, missing some trailing commas) and was replaced with the real captured output. Rust doc comments are carried over as JSDoc `/** ... */` blocks ahead of the field or type they document. `TS_RS_LARGE_INT` was left unset, so `u64`/`i64`/`u128`/`i128` fields map to TypeScript `bigint`, not `number`. `DateTime<Utc>` needs the `chrono-impl` cargo feature. **`serde_json::Value` (`ServerProps.raw`) does *not* work cleanly with the `serde-json-impl` feature**: it emits a bare `raw: JsonValue` reference with no `JsonValue` definition anywhere in the exported set — a dangling type the moment files are concatenated. Fixed with `#[ts(type = "unknown")]` on that one field instead, and the feature is no longer enabled. `PathBuf` and `IpAddr` need no extra feature — both are covered by ts-rs's default foreign-type impls, confirmed by the same run.
 
 ### F-000 — Preliminary evidence on the registration channel — **NOT YET CONFIRMED**
 

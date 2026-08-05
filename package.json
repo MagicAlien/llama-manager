@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "generate-types": "node scripts/generate-types.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

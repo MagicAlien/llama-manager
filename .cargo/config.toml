@@ -1,2 +1,21 @@
+# T-001 created this file; T-002 sets the value that actually makes export
+# land somewhere useful (docs/adr/adr-001-type-generation.md).
+#
+# ts-rs's own [env] `relative = true` resolves against the directory
+# containing this file (the repo root), not against src-tauri/ where cargo
+# is actually invoked (ci.yml runs every cargo command with
+# `working-directory: src-tauri`). T-001's original value, "../src/lib",
+# would therefore have resolved to a sibling of the repo root, one level
+# above src/lib — not into it. See PROGRESS.md D-007.
+#
+# ts-rs writes one file per #[ts(export)] type by default (named after the
+# type). Pointing TS_RS_EXPORT_DIR at src/lib directly would scatter ~40
+# loose per-type files there, which the "single src/lib/types.ts, no
+# duplicate declarations" acceptance criterion rules out — and directing
+# many types at one shared `export_to` file is documented (ts-rs 12 docs)
+# to run each type's export as its own #[test], which race when they target
+# the same path. So export lands in a scratch directory under
+# src-tauri/target/ (already covered by .gitignore's `target/` entry) and
+# `scripts/generate-types.mjs` collects it into the one committed file.
 [env]
-TS_RS_EXPORT_DIR = { value = "../src/lib", relative = true }
+TS_RS_EXPORT_DIR = { value = "src-tauri/target/ts-rs-bindings", relative = true }
