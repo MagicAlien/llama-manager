@@ -598,6 +598,17 @@ pub struct ServerProps {
     pub build_tag: Option<String>,
     pub models_max: Option<u32>,
     /// `/props` is not a stable contract; keep the original.
+    ///
+    /// `#[ts(type = "unknown")]`: ts-rs's `serde-json-impl` feature names
+    /// this `JsonValue` in the generated TS rather than defining it, so a
+    /// file that used the feature's default would reference an undefined
+    /// type the moment two or more exported files were concatenated (see
+    /// PROGRESS.md — caught by the owner's real `npm run generate-types`
+    /// run, not by this session). Overriding to `unknown` sidesteps needing
+    /// that definition at all; the field is already documented above as
+    /// "not a stable contract", so a type a caller must narrow before use
+    /// is arguably more honest than a named alias would have been anyway.
+    #[ts(type = "unknown")]
     pub raw: serde_json::Value,
 }
 

@@ -24,8 +24,10 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 # chrono-impl: CONTRACTS.md §1 types carry DateTime<Utc> fields throughout.
-# serde-json-impl: ServerProps.raw is serde_json::Value (CONTRACTS.md §2).
-ts-rs = { version = "12", features = ["chrono-impl", "serde-json-impl"] }
+# serde-json-impl deliberately NOT enabled: ServerProps.raw uses
+# #[ts(type = "unknown")] instead (core/types.rs), so ts-rs never needs its
+# own binding for serde_json::Value — see the comment on that field for why.
+ts-rs = { version = "12", features = ["chrono-impl"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
