@@ -98,6 +98,23 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # T-002: src/lib/types.ts is generated from src-tauri/src/core/types.rs
+      # (docs/CONTRACTS.md §1) via ts-rs; AGENTS.md invariant 9 says it is
+      # never hand-edited, so the only way that invariant holds is a gate
+      # that regenerates it and fails on any diff. `npm run generate-types`
+      # itself runs `cargo test export_bindings` (scripts/generate-types.mjs)
+      # — this step depends on the Rust toolchain installed above, which is
+      # why it runs here rather than earlier alongside `npm ci`.
+      - name: Check src/lib/types.ts is fresh
+        shell: pwsh
+        run: |
+          npm run generate-types
+          git diff --exit-code -- src/lib/types.ts
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "src/lib/types.ts is stale — run 'npm run generate-types' and commit the result."
+            exit 1
+          }
+
       - name: npm run lint
         run: npm run lint
 

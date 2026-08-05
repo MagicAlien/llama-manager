@@ -7,11 +7,25 @@ publish = false
 # T-001 scaffold crate: replaces T-000's bootstrap outright. Only what the
 # scaffold itself needs — no core/, ipc/ or db/ dependency belongs here
 # until the task that adds that module (PLAN.md §3).
+#
+# T-002 adds core/types.rs (docs/CONTRACTS.md §1) and with it: serde,
+# serde_json, thiserror (approved, PLAN.md §3) and ts-rs (approved, PLAN.md
+# §3, ADR-001). chrono is NOT in PLAN.md §3's approved list; CONTRACTS.md §1
+# nonetheless declares every timestamp field as `DateTime<Utc>`, which has no
+# std alternative. Added and justified per AGENTS.md §4 — see this PR's
+# Dependencies section and PROGRESS.md D-007.
 [dependencies]
 tauri = { version = "2", features = [] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+# chrono-impl: CONTRACTS.md §1 types carry DateTime<Utc> fields throughout.
+# serde-json-impl: ServerProps.raw is serde_json::Value (CONTRACTS.md §2).
+ts-rs = { version = "12", features = ["chrono-impl", "serde-json-impl"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

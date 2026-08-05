@@ -1,0 +1,93 @@
+#!/usr/bin/env node
+// T-002 — regenerates `src/lib/types.ts` from the Rust contract types in
+// `src-tauri/src/core/types.rs` (docs/CONTRACTS.md §1).
+//
+// Mechanism (docs/adr/adr-001-type-generation.md's open question, resolved
+// here): ts-rs's `#[ts(export)]` writes one file per type by default, named
+// after the type, into `TS_RS_EXPORT_DIR` (`.cargo/config.toml`:
+// `src-tauri/target/ts-rs-bindings`). Directing many types at one shared
+// `export_to` path was the alternative; it was not used because each
+// type's export runs as its own `#[test]` (ts-rs 12 docs: "When running
+// `cargo test` ... the following TypeScript type will be exported"), and
+// `cargo test` does not serialize tests writing to the same path — they
+// race, and the file holds whichever type wrote last. Per-type files don't
+// have that problem, so this script collects them afterward instead.
+//
+// Steps:
+//   1. Remove any stale bindings from a previous run.
+//   2. `cargo test export_bindings` in src-tauri/ — the substring every
+//      ts-rs-generated export test's name contains — to (re)populate the
+//      bindings directory. This requires the pinned Rust toolchain
+//      (rust-toolchain.toml); it is not optional the way a lint step is.
+//   3. Concatenate every emitted `*.ts` file, alphabetically for a
+//      deterministic diff, stripping the self-referential
+//      `import type { X } from "./Y"` lines ts-rs emits for cross-type
+//      references — meaningless once everything lives in one file — and
+//      write the result to `src/lib/types.ts` with a generated-file banner
+//      (AGENTS.md invariant 9: this file is never hand-edited).
+
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const srcTauriDir = path.join(repoRoot, "src-tauri");
+const bindingsDir = path.join(repoRoot, "src-tauri", "target", "ts-rs-bindings");
+const outFile = path.join(repoRoot, "src", "lib", "types.ts");
+
+function run() {
+  // 1. Clean slate — a type renamed or removed since the last run must not
+  // leave its old file behind to be silently collected again.
+  if (existsSync(bindingsDir)) {
+    rmSync(bindingsDir, { recursive: true, force: true });
+  }
+  mkdirSync(bindingsDir, { recursive: true });
+
+  // 2. Trigger ts-rs's export tests. Inherit stdio so a compile error or a
+  // failing unrelated test in the same run is visible, not swallowed.
+  execFileSync("cargo", ["test", "export_bindings"], {
+    cwd: srcTauriDir,
+    stdio: "inherit",
+  });
+
+  const files = readdirSync(bindingsDir)
+    .filter((f) => f.endsWith(".ts"))
+    .sort((a, b) => a.localeCompare(b));
+
+  if (files.length === 0) {
+    throw new Error(
+      `no *.ts files were produced in ${bindingsDir} — no type derives TS, ` +
+        "or TS_RS_EXPORT_DIR (.cargo/config.toml) is not resolving where this script expects."
+    );
+  }
+
+  // 3. Collect. Self-referential import lines are the only thing ts-rs
+  // writes that doesn't make sense once every type shares one file; every
+  // exported declaration itself is kept verbatim.
+  const importLine = /^import type \{[^}]*\} from "\.\/[^"]+";?\s*$/;
+  const banner = [
+    "// GENERATED FILE — DO NOT EDIT.",
+    "//",
+    "// Produced by `npm run generate-types` (scripts/generate-types.mjs) from",
+    "// the Rust contract types in src-tauri/src/core/types.rs, which are",
+    "// themselves transcribed from docs/CONTRACTS.md §1. AGENTS.md invariant 9:",
+    "// this file is generated, never hand-edited. CI fails if it is stale.",
+    "",
+  ].join("\n");
+
+  const sections = files.map((file) => {
+    const text = readFileSync(path.join(bindingsDir, file), "utf8");
+    const kept = text
+      .split("\n")
+      .filter((line) => !importLine.test(line))
+      .join("\n")
+      .trim();
+    return `// ---- ${file.replace(/\.ts$/, "")} ----\n${kept}\n`;
+  });
+
+  writeFileSync(outFile, banner + "\n" + sections.join("\n"), "utf8");
+  console.log(`wrote ${sections.length} types to ${path.relative(repoRoot, outFile)}`);
+}
+
+run();
