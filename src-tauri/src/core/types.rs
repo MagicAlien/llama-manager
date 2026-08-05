@@ -386,9 +386,13 @@ pub enum ImportProgress {
         index: u32,
         total: u32,
     },
+    /// Boxed: `ModelEntry` is large relative to this enum's other variants
+    /// (clippy::large_enum_variant, `-D warnings` in CI) — boxing is
+    /// transparent to both `serde_json` and the generated TypeScript type,
+    /// since `Box<T>`'s `Serialize`/`TS` impls both delegate to `T`.
     FileDone {
         job_id: ImportJobId,
-        entry: ModelEntry,
+        entry: Box<ModelEntry>,
         index: u32,
         total: u32,
     },
@@ -958,7 +962,7 @@ mod tests {
         let entry_json = serde_json::to_value(&entry).unwrap();
         let file_done = ImportProgress::FileDone {
             job_id: "job-1".into(),
-            entry: entry.clone(),
+            entry: Box::new(entry.clone()),
             index: 0,
             total: 3,
         };
