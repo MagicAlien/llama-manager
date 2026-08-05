@@ -75,9 +75,15 @@ pub struct ModelRow {
     pub last_launched_at: Option<DateTime<Utc>>,
 }
 
-fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(
+// clippy::type_complexity: factored into a named type per the lint's own
+// suggestion, rather than suppressed — `model_from_row` and
+// `model_row_to_struct` share this exact shape, so one definition also
+// keeps them from silently drifting apart.
+type ModelRowTuple = (
     String, String, String, String, String, i64, String, String, String, String, String, String, i64, i64, String, Option<String>,
-)> {
+);
+
+fn model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRowTuple> {
     Ok((
         row.get(0)?,
         row.get(1)?,
@@ -102,11 +108,7 @@ const MODEL_COLUMNS: &str = "id, display_name, served_name, file_path, shard_pat
     sha256_head, metadata_json, compatibility_json, availability, launch_params_json, \
     sampling_json, preload, pinned, added_at, last_launched_at";
 
-fn model_row_to_struct(
-    t: (
-        String, String, String, String, String, i64, String, String, String, String, String, String, i64, i64, String, Option<String>,
-    ),
-) -> Result<ModelRow, AppError> {
+fn model_row_to_struct(t: ModelRowTuple) -> Result<ModelRow, AppError> {
     Ok(ModelRow {
         id: t.0,
         display_name: t.1,
@@ -501,10 +503,12 @@ pub struct LaunchHistoryRow {
 const LAUNCH_HISTORY_COLUMNS: &str =
     "id, file_path, launched_at, params_json, succeeded, actual_vram_bytes, load_seconds, error_message";
 
-#[allow(clippy::type_complexity)]
-fn launch_history_from_row(
-    r: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(i64, String, String, String, i64, Option<i64>, Option<f64>, Option<String>)> {
+// Same rationale as `ModelRowTuple` above: a named type instead of an
+// `#[allow(clippy::type_complexity)]` suppression, shared by both
+// functions that need this exact shape.
+type LaunchHistoryTuple = (i64, String, String, String, i64, Option<i64>, Option<f64>, Option<String>);
+
+fn launch_history_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchHistoryTuple> {
     Ok((
         r.get(0)?,
         r.get(1)?,
@@ -517,9 +521,7 @@ fn launch_history_from_row(
     ))
 }
 
-fn launch_history_row_to_struct(
-    t: (i64, String, String, String, i64, Option<i64>, Option<f64>, Option<String>),
-) -> Result<LaunchHistoryRow, AppError> {
+fn launch_history_row_to_struct(t: LaunchHistoryTuple) -> Result<LaunchHistoryRow, AppError> {
     Ok(LaunchHistoryRow {
         id: t.0,
         file_path: t.1,
