@@ -13,18 +13,18 @@
 export type AppError = { "kind": "InvalidTransition", "detail": { from: string, command: string, } } | { "kind": "NotFound", "detail": { what: string, } } | { "kind": "Io", "detail": { message: string, } } | { "kind": "Database", "detail": { message: string, } } | { "kind": "Network", "detail": { message: string, } } | { "kind": "RateLimited", "detail": { retry_after_seconds: bigint, } } | { "kind": "ChecksumMismatch", "detail": { expected: string, actual: string, } } | { "kind": "UnsafeArchiveEntry", "detail": { entry: string, } } | { "kind": "InvalidPath", "detail": { path: string, reason: string, } } | { "kind": "GgufParse", "detail": { message: string, } } | { "kind": "PortInUse", "detail": { port: number, } } | { "kind": "UpstreamUnavailable", "detail": { state: string, } } | { "kind": "Unauthorized" } | { "kind": "SchemaTooNew", "detail": { found: number, known: number, } } | { "kind": "Internal", "detail": { message: string, } };
 
 // ---- AppSettings ----
-export type AppSettings = {
+export type AppSettings = { 
 /**
  * "dark" | "light" | "system"
  */
-theme: string, launch_at_startup: boolean, default_picker_folder: string | null,
+theme: string, launch_at_startup: boolean, default_picker_folder: string | null, 
 /**
  * "off" | "notify" | "auto"
  */
 auto_update_policy: string, log_retention_days: number, };
 
 // ---- AvailableRelease ----
-export type AvailableRelease = { build_tag: string, backend: Backend, asset_name: string, asset_url: string,
+export type AvailableRelease = { build_tag: string, backend: Backend, asset_name: string, asset_url: string, 
 /**
  * `None` when the release omits checksums.
  */
@@ -44,14 +44,14 @@ export type CheckStatus = "Pass" | "Warn" | "Fail";
 export type Compatibility = "Supported" | { "SupportedWithWarnings": Array<CompatibilityNote> } | { "Unsupported": string };
 
 // ---- CompatibilityNote ----
-export type CompatibilityNote = { text: string,
+export type CompatibilityNote = { text: string, 
 /**
  * NVFP4 sets this; see `PLAN.md` §2.6.
  */
 experimental: boolean, };
 
 // ---- Diagnosis ----
-export type Diagnosis = {
+export type Diagnosis = { 
 /**
  * "cuda_dll_missing" | "oom_vram" | "port_in_use" | ...
  */
@@ -83,19 +83,19 @@ export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, 
 export type FlashAttn = "On" | "Off" | "Auto";
 
 // ---- GgufMetadata ----
-export type GgufMetadata = {
+export type GgufMetadata = { 
 /**
  * "llama" | "qwen3" | "deepseek2" | ...
  */
-architecture: string, param_count: bigint | null,
+architecture: string, param_count: bigint | null, 
 /**
  * "Q4_K_M" | "MXFP4" | "NVFP4" | "F16" | ...
  */
-quantization: string,
+quantization: string, 
 /**
  * Layer count — drives `-ngl`.
  */
-block_count: number, context_length: number | null, embedding_length: number | null,
+block_count: number, context_length: number | null, embedding_length: number | null, 
 /**
  * Both are required by the KV cache term of the estimator. With Grouped
  * Query Attention the ratio between them reaches 8:1, so ignoring
@@ -106,7 +106,7 @@ block_count: number, context_length: number | null, embedding_length: number | n
 attention_head_count: number | null, attention_head_count_kv: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, };
 
 // ---- GpuInfo ----
-export type GpuInfo = { index: number, name: string,
+export type GpuInfo = { index: number, name: string, 
 /**
  * Blackwell = (12, 0) or (10, x).
  */
@@ -116,7 +116,7 @@ compute_capability: [number, number], vram_total_bytes: bigint, vram_free_bytes:
 export type GpuTelemetry = { index: number, vram_used_bytes: bigint, vram_total_bytes: bigint, utilization_percent: number, temperature_c: number | null, };
 
 // ---- HealthCheck ----
-export type HealthCheck = {
+export type HealthCheck = { 
 /**
  * "gpu_present" | "driver_ok" | "cuda13_ok" | "disk_space" | "endpoint_bindable"
  */
@@ -129,7 +129,7 @@ export type ImportProgress = { "Queued": { job_id: string, total_files: number, 
 export type InstallProgress = "Resolving" | { "Downloading": { received_bytes: bigint, total_bytes: bigint, bytes_per_sec: bigint, } } | "Verifying" | { "Extracting": { entries_done: number, entries_total: number, } } | "Registering" | { "Done": { build: RuntimeBuild, } } | { "Failed": { error: AppError, } };
 
 // ---- LaunchParams ----
-export type LaunchParams = { gpu_layers: number | null, ctx_size: number | null, batch_size: number | null, ubatch_size: number | null, flash_attn: FlashAttn | null, cache_type_k: string | null, cache_type_v: string | null, n_cpu_moe: number | null, tensor_split: Array<number> | null, main_gpu: number | null, no_mmap: boolean | null, mlock: boolean | null, threads: number | null, chat_template: string | null, mmproj_path: string | null,
+export type LaunchParams = { gpu_layers: number | null, ctx_size: number | null, batch_size: number | null, ubatch_size: number | null, flash_attn: FlashAttn | null, cache_type_k: string | null, cache_type_v: string | null, n_cpu_moe: number | null, tensor_split: Array<number> | null, main_gpu: number | null, no_mmap: boolean | null, mlock: boolean | null, threads: number | null, chat_template: string | null, mmproj_path: string | null, 
 /**
  * Unvalidated passthrough. User-entered only — never set by app logic.
  * See `AGENTS.md` §1.
@@ -137,7 +137,7 @@ export type LaunchParams = { gpu_layers: number | null, ctx_size: number | null,
 extra_args: Array<string>, };
 
 // ---- LaunchRecord ----
-export type LaunchRecord = {
+export type LaunchRecord = { 
 /**
  * Absolute path, not the entry id: history outlives the catalogue entry.
  */
@@ -160,31 +160,31 @@ export type LoadedModelState = { model_id: string, state: ModelLoadState, vram_b
 export type ModelAvailability = "Present" | "Missing" | "Unreadable";
 
 // ---- ModelEntry ----
-export type ModelEntry = {
+export type ModelEntry = { 
 /**
  * Stable slug derived from the absolute path.
  */
-id: string, display_name: string,
+id: string, display_name: string, 
 /**
  * What `/v1/models` exposes; unique across the catalogue.
  */
-served_name: string,
+served_name: string, 
 /**
  * Absolute, wherever the user keeps it — never moved.
  */
-file_path: string, shard_paths: Array<string>, size_bytes: bigint,
+file_path: string, shard_paths: Array<string>, size_bytes: bigint, 
 /**
  * Hash of first 1 MiB + size — duplicate *signal*, not identity.
  */
-sha256_head: string, metadata: GgufMetadata, compatibility: Compatibility, availability: ModelAvailability,
+sha256_head: string, metadata: GgufMetadata, compatibility: Compatibility, availability: ModelAvailability, 
 /**
  * Another entry with the same `sha256_head`.
  */
-duplicate_of: string | null, launch_params: LaunchParams, sampling_defaults: SamplingDefaults,
+duplicate_of: string | null, launch_params: LaunchParams, sampling_defaults: SamplingDefaults, 
 /**
  * Loaded at server start rather than on demand.
  */
-preload: boolean,
+preload: boolean, 
 /**
  * Exempt from LRU eviction.
  */
@@ -214,7 +214,7 @@ export type RequestLogEntry = { at: string, method: string, path: string, status
 export type RetainedModelSettings = { file_path: string, launch_params: LaunchParams, sampling_defaults: SamplingDefaults, preload: boolean, pinned: boolean, retained_at: string, };
 
 // ---- RuntimeBuild ----
-export type RuntimeBuild = {
+export type RuntimeBuild = { 
 /**
  * "b9196"
  */
@@ -224,45 +224,45 @@ build_tag: string, backend: Backend, install_path: string, is_active: boolean, i
 export type SamplingDefaults = { temperature: number | null, top_p: number | null, top_k: number | null, min_p: number | null, repeat_penalty: number | null, presence_penalty: number | null, frequency_penalty: number | null, seed: bigint | null, };
 
 // ---- ServerConfig ----
-export type ServerConfig = {
+export type ServerConfig = { 
 /**
  * The address clients configure. Owned by the app, stable across restarts.
  */
-listen_address: string,
+listen_address: string, 
 /**
  * Default 8080; never auto-incremented.
  */
-listen_port: number,
+listen_port: number, 
 /**
  * Range the app draws the upstream loopback port from. Internal.
  * Default `(49500, 49999)`.
  */
-upstream_port_range: [number, number],
+upstream_port_range: [number, number], 
 /**
  * How long a request is held while the coordinator is not yet
  * answering. Default 120.
  */
-startup_hold_seconds: number,
+startup_hold_seconds: number, 
 /**
  * How long the coordinator itself may take to answer before Crashed.
  * Default 120.
  */
-process_timeout_seconds: number,
+process_timeout_seconds: number, 
 /**
  * How long preloading may take before Crashed. Separate from the above
  * because a 65 GB preload is minutes, not seconds, and one timeout
  * cannot serve both without being uselessly loose for the first.
  * Default 900.
  */
-preload_timeout_seconds: number,
+preload_timeout_seconds: number, 
 /**
  * `--models-max`; 1 = strict hot-swap.
  */
-models_max: number,
+models_max: number, 
 /**
  * `--models-autoload`.
  */
-autoload: boolean,
+autoload: boolean, 
 /**
  * **No flag is known to implement this.** It is modelled here and
  * shown in T-050, but `docs/LLAMACPP.md` §1 lists it as `[assumed]`
@@ -271,15 +271,15 @@ autoload: boolean,
  * control rather than offering one that does nothing. See
  * `PROGRESS.md` D-003.
  */
-idle_unload_seconds: number | null,
+idle_unload_seconds: number | null, 
 /**
  * Never the key itself.
  */
-api_key_set: boolean,
+api_key_set: boolean, 
 /**
  * Default true; in-memory only.
  */
-request_log_enabled: boolean,
+request_log_enabled: boolean, 
 /**
  * Concurrent in-flight requests the listener will admit. `None` — the
  * default — means the app imposes no limit of its own and lets the
@@ -292,9 +292,19 @@ request_log_enabled: boolean,
 max_concurrent_requests: number | null, };
 
 // ---- ServerProps ----
-export type ServerProps = { build_tag: string | null, models_max: number | null,
+export type ServerProps = { build_tag: string | null, models_max: number | null, 
 /**
  * `/props` is not a stable contract; keep the original.
+ *
+ * `#[ts(type = "unknown")]`: ts-rs's `serde-json-impl` feature names
+ * this `JsonValue` in the generated TS rather than defining it, so a
+ * file that used the feature's default would reference an undefined
+ * type the moment two or more exported files were concatenated (see
+ * PROGRESS.md — caught by the owner's real `npm run generate-types`
+ * run, not by this session). Overriding to `unknown` sidesteps needing
+ * that definition at all; the field is already documented above as
+ * "not a stable contract", so a type a caller must narrow before use
+ * is arguably more honest than a named alias would have been anyway.
  */
 raw: unknown, };
 
@@ -311,19 +321,19 @@ export type ServerState = "Stopped" | { "Starting": { since: string, upstream_po
 export type StartupPhase = "WaitingForProcess" | { "Preloading": { done: number, total: number, current: string | null, } };
 
 // ---- TelemetrySnapshot ----
-export type TelemetrySnapshot = { sampled_at: string, gpus: Array<GpuTelemetry>, loaded_models: Array<LoadedModelState>,
+export type TelemetrySnapshot = { sampled_at: string, gpus: Array<GpuTelemetry>, loaded_models: Array<LoadedModelState>, 
 /**
  * Counted at the app's listener. Available because the app owns the
  * endpoint — under direct binding these had no source.
  */
-active_requests: number, requests_last_minute: number,
+active_requests: number, requests_last_minute: number, 
 /**
  * Parsed from the server's own stderr, never from response bodies.
  */
 tokens_per_sec: number | null, uptime_seconds: bigint, };
 
 // ---- VerifiedFlag ----
-export type VerifiedFlag = {
+export type VerifiedFlag = { 
 /**
  * "--flash-attn"
  */
