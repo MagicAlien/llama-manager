@@ -511,8 +511,15 @@ pub struct ServerConfig {
 #[ts(export)]
 pub enum EndpointState {
     Unbound,
-    Bound { address: IpAddr, port: u16 },
-    BindFailed { address: IpAddr, port: u16, error: AppError },
+    Bound {
+        address: IpAddr,
+        port: u16,
+    },
+    BindFailed {
+        address: IpAddr,
+        port: u16,
+        error: AppError,
+    },
 }
 
 /// Never contains a body, a header value, or the model name. See `PLAN.md` §6.
@@ -672,10 +679,9 @@ mod tests {
     use serde_json::json;
 
     fn generated_types() -> String {
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/types.ts"))
-            .expect(
-                "src/lib/types.ts must exist — run `npm run generate-types` before `cargo test`",
-            )
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/types.ts")).expect(
+            "src/lib/types.ts must exist — run `npm run generate-types` before `cargo test`",
+        )
     }
 
     fn normalize(s: &str) -> String {
@@ -745,7 +751,10 @@ mod tests {
     fn flash_attn_round_trips() {
         assert_eq!(serde_json::to_value(FlashAttn::On).unwrap(), json!("On"));
         assert_eq!(serde_json::to_value(FlashAttn::Off).unwrap(), json!("Off"));
-        assert_eq!(serde_json::to_value(FlashAttn::Auto).unwrap(), json!("Auto"));
+        assert_eq!(
+            serde_json::to_value(FlashAttn::Auto).unwrap(),
+            json!("Auto")
+        );
         assert_eq!(
             serde_json::from_value::<FlashAttn>(json!("Auto")).unwrap(),
             FlashAttn::Auto
@@ -845,7 +854,10 @@ mod tests {
         let addr: IpAddr = "127.0.0.1".parse().unwrap();
         let addr_json = serde_json::to_value(addr).unwrap();
 
-        let bound = EndpointState::Bound { address: addr, port: 8080 };
+        let bound = EndpointState::Bound {
+            address: addr,
+            port: 8080,
+        };
         assert_eq!(
             serde_json::to_value(&bound).unwrap(),
             json!({"Bound": {"address": addr_json, "port": 8080}})
@@ -853,7 +865,10 @@ mod tests {
 
         let err = AppError::PortInUse { port: 8080 };
         let err_json = serde_json::to_value(&err).unwrap();
-        assert_eq!(err_json, json!({"kind": "PortInUse", "detail": {"port": 8080}}));
+        assert_eq!(
+            err_json,
+            json!({"kind": "PortInUse", "detail": {"port": 8080}})
+        );
 
         let bind_failed = EndpointState::BindFailed {
             address: addr,
@@ -866,7 +881,8 @@ mod tests {
         );
 
         // Round trip, not just one-way serialize.
-        let back: EndpointState = serde_json::from_value(serde_json::to_value(&bound).unwrap()).unwrap();
+        let back: EndpointState =
+            serde_json::from_value(serde_json::to_value(&bound).unwrap()).unwrap();
         assert_eq!(back, bound);
 
         let ts = generated_types();
@@ -902,8 +918,13 @@ mod tests {
 
         let build = sample_runtime_build();
         let build_json = serde_json::to_value(&build).unwrap();
-        let done = InstallProgress::Done { build: build.clone() };
-        assert_eq!(serde_json::to_value(&done).unwrap(), json!({"Done": {"build": build_json}}));
+        let done = InstallProgress::Done {
+            build: build.clone(),
+        };
+        assert_eq!(
+            serde_json::to_value(&done).unwrap(),
+            json!({"Done": {"build": build_json}})
+        );
 
         let err = AppError::ChecksumMismatch {
             expected: "aaa".into(),
@@ -911,7 +932,10 @@ mod tests {
         };
         let err_json = serde_json::to_value(&err).unwrap();
         let failed = InstallProgress::Failed { error: err };
-        assert_eq!(serde_json::to_value(&failed).unwrap(), json!({"Failed": {"error": err_json}}));
+        assert_eq!(
+            serde_json::to_value(&failed).unwrap(),
+            json!({"Failed": {"error": err_json}})
+        );
 
         let ts = generated_types();
         assert_ts_contains(&ts, "Downloading");
@@ -1006,8 +1030,14 @@ mod tests {
 
     #[test]
     fn backend_round_trips() {
-        assert_eq!(serde_json::to_value(Backend::Vulkan).unwrap(), json!({"kind": "Vulkan"}));
-        assert_eq!(serde_json::to_value(Backend::Cpu).unwrap(), json!({"kind": "Cpu"}));
+        assert_eq!(
+            serde_json::to_value(Backend::Vulkan).unwrap(),
+            json!({"kind": "Vulkan"})
+        );
+        assert_eq!(
+            serde_json::to_value(Backend::Cpu).unwrap(),
+            json!({"kind": "Cpu"})
+        );
 
         // The point of this case: `major` the code has no branch for today
         // (no real GPU reports major 200) still round-trips as plain data,
@@ -1050,9 +1080,18 @@ mod tests {
 
     #[test]
     fn check_status_round_trips() {
-        assert_eq!(serde_json::to_value(CheckStatus::Pass).unwrap(), json!("Pass"));
-        assert_eq!(serde_json::to_value(CheckStatus::Warn).unwrap(), json!("Warn"));
-        assert_eq!(serde_json::to_value(CheckStatus::Fail).unwrap(), json!("Fail"));
+        assert_eq!(
+            serde_json::to_value(CheckStatus::Pass).unwrap(),
+            json!("Pass")
+        );
+        assert_eq!(
+            serde_json::to_value(CheckStatus::Warn).unwrap(),
+            json!("Warn")
+        );
+        assert_eq!(
+            serde_json::to_value(CheckStatus::Fail).unwrap(),
+            json!("Fail")
+        );
 
         let ts = generated_types();
         assert_ts_contains(&ts, r#""Pass""#);
@@ -1119,7 +1158,8 @@ mod tests {
             json!({"kind": "InvalidTransition", "detail": {"from": "Stopped", "command": "stop_server"}})
         );
 
-        let back: AppError = serde_json::from_value(serde_json::to_value(&invalid).unwrap()).unwrap();
+        let back: AppError =
+            serde_json::from_value(serde_json::to_value(&invalid).unwrap()).unwrap();
         assert_eq!(back, invalid);
 
         let ts = generated_types();
