@@ -1,0 +1,439 @@
+From a8a6a68e0ed19325b428fd75df7c5260a59c46b4 Mon Sep 17 00:00:00 2001
+From: Davide Ercolano <davide.ercolano@gmail.com>
+Date: Thu, 6 Aug 2026 11:38:27 +0200
+Subject: [PATCH] T-004: AppError::{code, message, remediation}, unwrap/expect
+ clippy gate for core/
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- impl AppError placed beneath the enum in core/types.rs, per docs/CONTRACTS.md
+  §1's own code fence (see PROGRESS.md D-011 for why PLAN.md's separate
+  error.rs line in its Repository layout diagram does not apply here).
+- code(): static per-variant match, unique by construction.
+- message(): delegates to the Display impl thiserror generates from each
+  variant's #[error("...")] string.
+- remediation(): Some(..) for the nine variants with an actionable next
+  step, None for the six that don't have one.
+- every_app_error_variant_has_a_serialized_shape: one assertion per variant.
+- no_variant_message_is_empty, code_values_are_unique_across_variants: both
+  iterate a shared all_app_error_variants() fixture.
+- core/mod.rs: #![deny(clippy::unwrap_used, clippy::expect_used)], scoped to
+  core/ only (ipc/ doesn't exist yet -- see PROGRESS.md Observations).
+- src-tauri/clippy.toml: allow-unwrap-in-tests / allow-expect-in-tests, so
+  the deny doesn't also fire inside existing #[cfg(test)] code.
+- PROGRESS.md: T-004 moved to In progress, D-011 recorded, two Observations
+  recorded (db/migrations/mod.rs's expect() outside tests; ipc/mod.rs must
+  copy the same clippy attribute when created).
+
+No local Rust toolchain and no push access this session (same constraint as
+T-001-T-003): nothing here has been compiled, formatted, clippy-checked, or
+run. Handed to the owner as a patch.
+---
+ PROGRESS.md                 |  25 ++--
+ src-tauri/clippy.toml       |  10 ++
+ src-tauri/src/core/mod.rs   |  16 ++
+ src-tauri/src/core/types.rs | 283 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 324 insertions(+), 10 deletions(-)
+ create mode 100644 src-tauri/clippy.toml
+
+diff --git a/PROGRESS.md b/PROGRESS.md
+index 0738ea1..4ffa48e 100644
+--- a/PROGRESS.md
++++ b/PROGRESS.md
+@@ -11,23 +11,17 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
+ - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
+ - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
+ 
+-Last updated: 5 August 2026 — T-000 (PR #3), T-001 (PR #4) and T-002 (PR #5) merged into `main`. T-003 (Database layer) is **Done**, PR #6, CI green — merged pending owner's final click (same state T-002's entry once recorded for PR #5). Agent had no local Rust toolchain and no push access this session, so the branch was handed to the owner as a patch, applied and gated for real on a Windows machine — one real `clippy::type_complexity` finding (fixed by factoring two tuple types rather than suppressing) and one `cargo fmt --check` finding surfaced by CI specifically (not caught locally, since the clippy fixup was re-gated with clippy alone, not a full re-run — worth remembering for the next task, see Observations). D-004 and D-005 remain open, owner decisions, not touched. D-010 (new, T-003) also left open. Take T-004 next.
++Last updated: 6 August 2026 — T-004 (Error model) is **In progress** on branch `t-004-error-model`, not yet merged. Agent had no local Rust toolchain and no push access this session (same constraint as T-001–T-003), so the branch was handed to the owner as a patch rather than pushed. Nothing in this PR has been compiled, clippy-checked, formatted, or run — the acceptance criteria below are reasoned, not proven, and stay unchecked in the PR template until the owner's real gate run confirms them. D-004, D-005 and D-010 remain open, untouched. D-011 (new, T-004) also open.
+ 
+ ---
+ 
+ ## In progress
+ 
+-*(nothing — T-003 is Done, PR #6, CI green, merged pending owner's final click. Take T-004 next.)*
++**T-004 — Error model** `[dep: T-001]`. Branch `t-004-error-model` off `main`, handed to the owner as a patch (no push access this session). `impl AppError { code, message, remediation }` added directly beneath the enum in `src-tauri/src/core/types.rs`, matching `docs/CONTRACTS.md` §1's own code fence (the `impl` shown right after the enum, commented `// core/src/types.rs`) — see D-011 for why this was not actually the ambiguity it looked like going in. `code()` is a static match, one arm per variant, unique by construction and re-checked by `code_values_are_unique_across_variants`. `message()` delegates to the `Display` impl `thiserror` already generates from each variant's `#[error("...")]` string, so wording lives in one place. `remediation()` returns `Some` for the nine variants with an actionable next step, `None` for the six that don't have one. Every variant gets its own serialized-shape assertion in a new `every_app_error_variant_has_a_serialized_shape` test (`app_error_round_trips`, already present from T-002, covered only three). `no_variant_message_is_empty` and `code_values_are_unique_across_variants` both iterate a shared `all_app_error_variants()` fixture rather than hand-duplicating the variant list a third time.
+ 
+----
+-
+-## Next up
+-
+-**T-004 — Error model** `[dep: T-001]`. Lowest-numbered task whose dependency (`T-001`) is `Done` and which is not `Blocked` — T-003 no longer occupies that slot now that it's closed.
+-
+-Selection rule: the lowest-numbered task in `docs/TASKS.md` whose dependencies are all `Done` and which is not `Blocked`.
++The `unwrap()`/`expect()` clippy gate (`AGENTS.md` invariant 6) is `#![deny(clippy::unwrap_used, clippy::expect_used)]` in `src-tauri/src/core/mod.rs` — module-scoped (propagates to `core::types` and any future submodule) rather than crate-wide, so `db/` and `main.rs` stay outside it as the invariant says. `deny`, not `warn`, because an in-source attribute for a specific lint outranks a command-line group flag (`-D warnings`) in rustc's lint-precedence order, so `warn` here would not actually have failed CI. New `src-tauri/clippy.toml` sets `allow-unwrap-in-tests` / `allow-expect-in-tests` so the deny doesn't also reject the `.unwrap()` calls already inside `#[cfg(test)]` — that's what makes "outside tests" true rather than aspirational, without touching every existing test function. **`ipc/` does not exist yet**, so only `core/` carries the attribute today; whichever task creates `ipc/mod.rs` must copy the identical `#![deny(...)]` line, or invariant 6 goes unenforced there silently (also an Observation below).
+ 
+-**Task numbers changed again in the v6.3 review** (new T-025 in Milestone B; before that, v6.2 split the endpoint and added T-006). The maps are at the top of `docs/TASKS.md`. Nothing was renumbered in v6.3 — T-025 was appended.
++**Not done:** nothing here has been compiled, run through `cargo clippy`/`cargo fmt --check`/`cargo test`, or pushed. Same toolchain/push constraint as T-001–T-003 — see `docs/WORKFLOW.md` §5's third case (something needing infrastructure this session doesn't have, not a blocker to route around). Next step is the owner running the local gate from `docs/DEV-SETUP.md` on the applied patch, then the whole gate again after any fix (T-003's Observations note on why re-running only the failing check is not enough). The PR template is filled in below with every acceptance/invariant box left unchecked until that happens.
+ 
+ ---
+ 
+@@ -159,6 +153,14 @@ Things where reality differs from the documents, or where a task is ambiguous. *
+ 
+ This PR implements against `docs/CONTRACTS.md`'s explicit design reasoning (no foreign key, rows survive deletion of the `models` row) — the one instance in this contradiction with a stated rationale rather than a bare assertion. `launch_history` and `retained_model_settings` therefore carry no `FOREIGN KEY` to `models`, and the T-003 test suite asserts the "survives deletion" half of the acceptance text directly. The "cascade" half is deliberately not implemented and not tested as a cascade; treating that sentence as stale is this PR's working assumption, not a decision — it is recorded here per `AGENTS.md`'s working method and left `open` for the project owner, the same pattern as D-004.
+ 
++### D-011 — `PLAN.md`'s Repository layout lists `src-tauri/src/error.rs`, which no task populates
++- Type: discrepancy
++- Found in: T-004, pre-implementation review
++- Evidence: `PLAN.md`'s "Repository layout" section shows `src-tauri/src/error.rs` as a file, a sibling of `core/`, `db/` and `ipc/` in the tree. T-004 (the only task that could plausibly own such a file — it is the one that adds `AppError`'s behaviour) is directed elsewhere by a more specific, more authoritative source: `docs/CONTRACTS.md` §1 shows the full `impl AppError { code, message, remediation }` signature block directly beneath the enum, in the same code fence, which opens with the comment `// core/src/types.rs`. `AppError` as a type has lived in `core/types.rs` since T-002, with a doc comment on the enum itself already anticipating T-004's methods landing in that file ("The `code()` / `message()` / `remediation()` methods themselves are T-004's, per the doc comment on the enum below — only the derive lives here"). Nothing in `docs/TASKS.md` T-004 names a file. Read together, this was worth checking carefully rather than assuming either document — but it resolves cleanly: `CONTRACTS.md` §1 is explicit and specific about where the code lives, `PLAN.md`'s tree is a whole-project map that also lists many files no task has created yet (`ipc/`, `core/env_probe.rs`, etc.), and unlike those, nothing on the current task list is ever going to create a standalone `error.rs` under this design. This is not the ambiguity it looked like — it's `PLAN.md`'s diagram carrying a stale line.
++- Affects: `PLAN.md`'s Repository layout section (the `error.rs` line)
++- Proposed: drop the `error.rs` line from the diagram. Mechanical, single reading, same class as D-009 — but `PLAN.md` corrections still need the owner's decision in writing before a `T-1xx` can apply it (`docs/WORKFLOW.md` §7), so it is recorded rather than fixed here.
++- Status: open
++
+ <!-- Format:
+ ### D-00x — <one-line summary>
+ - Type: discrepancy | ambiguity
+@@ -177,6 +179,9 @@ This PR implements against `docs/CONTRACTS.md`'s explicit design reasoning (no f
+ 
+ Things noticed in passing that are not part of any current task — a rough edge, a probable future problem, a small bug outside your scope. Noted here rather than fixed, per `docs/WORKFLOW.md` §3.
+ 
++- **`db/migrations/mod.rs::known_schema_version()` calls `.expect("MIGRATIONS is never empty")` outside any test (T-004 review).** `AGENTS.md` invariant 6 bans `unwrap()`/`expect()` outside tests only in `core/` and `ipc/`; `db/` is deliberately not in scope (T-004's own instructions were explicit on this point), so this is not a violation and the new clippy gate does not touch it. Noted rather than fixed here per scope discipline (`docs/WORKFLOW.md` §3) — `db/queries.rs` and `db/migrations/mod.rs` otherwise only use `.unwrap()`/`.expect()` inside `#[cfg(test)]` code, so this is the one instance outside tests in `db/` today.
++- **`ipc/mod.rs`, once created, must carry the same `#![deny(clippy::unwrap_used, clippy::expect_used)]` line T-004 added to `core/mod.rs`.** `AGENTS.md` invariant 6 names both `core/` and `ipc/`; the lint is scoped per-module (there is no crate-wide mechanism that would also spare `db/` and `main.rs`), so it only covers what exists today. Nothing currently enforces it for `ipc/`, because `ipc/` doesn't exist yet. Whichever task creates it should copy the attribute (and lean on `src-tauri/clippy.toml`'s `allow-unwrap-in-tests`/`allow-expect-in-tests`, which already covers both modules) rather than rediscover the precedence reasoning in `core/mod.rs`'s comment.
++
+ - **`(node:...) DEP0040` — Node's built-in `punycode` module is deprecated (T-002 CI logs).** Not ours: `npm why punycode` traces it to `eslint@9.39.5` → `@eslint/eslintrc` → `ajv@6.15.0` → `uri-js` (and separately `jsdom` → `whatwg-url` → `tr46`, already deduped to the same resolved version). `eslint` is already at the newest version inside its approved `^9.9.0` range (`PLAN.md` §3); the old `ajv` 6.x comes from eslint's own legacy-config compatibility layer, not from anything this project chose. A plain `require("punycode")` anywhere in that chain gets Node's deprecated built-in ahead of the real `punycode` npm package installed alongside it (also present, `2.3.1`) — that's the warning, not a version mismatch fixable from here. Harmless (warning only, nothing fails), and not fixable within this project without dropping or forking `eslint` or `jsdom`, so left alone rather than worked around.
+ - **`Cache not found for input keys: Windows-npm-...` (T-002 CI logs) is expected, not a problem.** First run of `actions/cache` against this exact `package-lock.json` hash — nothing to restore yet, so `npm ci` ran cold. The cache saves at the end of this run and later runs against an unchanged lockfile will hit it.
+ - **The endpoint listener is the project's most likely source of a silent regression.** Buffering an SSE stream produces correct-looking output in every test that compares concatenated bodies. T-042's chunk-boundary assertion is the only thing that catches it; if that test ever becomes flaky, fix it rather than relaxing it.
+diff --git a/src-tauri/clippy.toml b/src-tauri/clippy.toml
+new file mode 100644
+index 0000000..5f01111
+--- /dev/null
++++ b/src-tauri/clippy.toml
+@@ -0,0 +1,10 @@
++# `clippy::unwrap_used` / `clippy::expect_used` are enabled (as `deny`) at
++# module scope in `core/mod.rs` (and `ipc/mod.rs`, once that module exists —
++# AGENTS.md invariant 6 names both). These two options are what makes "outside
++# tests" true rather than aspirational: without them, both lints fire inside
++# `#[cfg(test)]` code too, and the realistic alternative is `#[allow(...)]`
++# sprinkled over every test function, which is worse than the lint it is
++# working around. `db/` and `main.rs` are deliberately not in scope here —
++# invariant 6 names `core/` and `ipc/` only.
++allow-unwrap-in-tests = true
++allow-expect-in-tests = true
+diff --git a/src-tauri/src/core/mod.rs b/src-tauri/src/core/mod.rs
+index 242b1de..75687d2 100644
+--- a/src-tauri/src/core/mod.rs
++++ b/src-tauri/src/core/mod.rs
+@@ -2,4 +2,20 @@
+ //! everything under it never imports `tauri`. `ipc/` (not yet created) is the
+ //! only thing allowed to depend on both `core/` and `tauri`.
+ 
++// AGENTS.md invariant 6: no `unwrap()` or `expect()` in `core/` or `ipc/`
++// outside tests. `deny` (not `warn`) so this fails `cargo clippy` on its
++// own, independent of the `-D warnings` CI passes — an in-source lint-level
++// attribute takes precedence over a command-line group flag for the same
++// lint, so relying on `-D warnings` alone would not have been enough here.
++// Scoped to this module (propagates to every submodule, including
++// `core::types`) rather than crate-wide: `db/` and `main.rs` are
++// deliberately outside invariant 6's scope, and `T-004`'s job is `core/`
++// and `ipc/` only. `ipc/mod.rs` must carry the identical attribute when
++// that module is created — nothing enforces invariant 6 there until it
++// does, since the module does not exist yet (see PROGRESS.md).
++// "Outside tests" is `../clippy.toml`'s job (`allow-unwrap-in-tests`,
++// `allow-expect-in-tests`), not this attribute's — `deny` alone would also
++// reject every `.unwrap()` inside `#[cfg(test)]` code.
++#![deny(clippy::unwrap_used, clippy::expect_used)]
++
+ pub mod types;
+diff --git a/src-tauri/src/core/types.rs b/src-tauri/src/core/types.rs
+index c0ad2a3..8d1d8cf 100644
+--- a/src-tauri/src/core/types.rs
++++ b/src-tauri/src/core/types.rs
+@@ -76,6 +76,95 @@ pub enum AppError {
+     Internal { message: String },
+ }
+ 
++/// `docs/CONTRACTS.md` §1 declares this `impl` block's signature directly
++/// beneath the enum, in the same code fence (commented `// core/src/types.rs`)
++/// — settling where it belongs before T-004 ever had to guess. `PLAN.md`'s
++/// "Repository layout" section separately shows `src-tauri/src/error.rs` as
++/// a sibling of `core/`, `db/` and `ipc/`, which this PR does not create:
++/// no task populates that file under CONTRACTS.md's design, so the diagram
++/// entry is stale rather than a second, competing instruction. Recorded as
++/// D-011 rather than silently dropped.
++impl AppError {
++    /// Stable, machine-readable identifier. One arm per variant, so a
++    /// missing arm is a compile error, not a silently-shared default —
++    /// uniqueness is enforced by construction here and re-asserted by
++    /// `code_values_are_unique_across_variants` below so a future variant
++    /// added without updating this match cannot collide by accident.
++    pub fn code(&self) -> &'static str {
++        match self {
++            AppError::InvalidTransition { .. } => "invalid_transition",
++            AppError::NotFound { .. } => "not_found",
++            AppError::Io { .. } => "io",
++            AppError::Database { .. } => "database",
++            AppError::Network { .. } => "network",
++            AppError::RateLimited { .. } => "rate_limited",
++            AppError::ChecksumMismatch { .. } => "checksum_mismatch",
++            AppError::UnsafeArchiveEntry { .. } => "unsafe_archive_entry",
++            AppError::InvalidPath { .. } => "invalid_path",
++            AppError::GgufParse { .. } => "gguf_parse",
++            AppError::PortInUse { .. } => "port_in_use",
++            AppError::UpstreamUnavailable { .. } => "upstream_unavailable",
++            AppError::Unauthorized => "unauthorized",
++            AppError::SchemaTooNew { .. } => "schema_too_new",
++            AppError::Internal { .. } => "internal",
++        }
++    }
++
++    /// User-facing, never empty. Delegates to the `Display` impl
++    /// `thiserror::Error` generates from each variant's `#[error("...")]`
++    /// string above, so the wording is written once, not twice in a way
++    /// that could drift — `no_variant_message_is_empty` asserts the
++    /// "never empty" half, and it holds for every variant here because
++    /// every `#[error(...)]` string above is itself non-empty.
++    pub fn message(&self) -> String {
++        self.to_string()
++    }
++
++    /// An actionable next step, where one exists. `None` for variants
++    /// where the honest remediation is "this is a bug, file a report" or
++    /// "retry" with nothing more specific to say — a fabricated
++    /// suggestion is worse than none.
++    pub fn remediation(&self) -> Option<String> {
++        match self {
++            AppError::PortInUse { port } => Some(format!(
++                "Choose a different port than {port}, or stop whatever else on this machine is using it."
++            )),
++            AppError::RateLimited {
++                retry_after_seconds,
++            } => Some(format!("Wait {retry_after_seconds}s, then retry.")),
++            AppError::ChecksumMismatch { .. } => Some(
++                "The downloaded file does not match its expected checksum. Delete it and retry the download."
++                    .to_string(),
++            ),
++            AppError::UnsafeArchiveEntry { .. } => Some(
++                "This archive was rejected because an entry inside it would write outside the install directory. Do not use it, and report it if it came from an official release."
++                    .to_string(),
++            ),
++            AppError::InvalidPath { .. } => {
++                Some("Check the path and try again.".to_string())
++            }
++            AppError::SchemaTooNew { .. } => Some(
++                "This database was created by a newer version of the app. Update the app before opening it again."
++                    .to_string(),
++            ),
++            AppError::Network { .. } => {
++                Some("Check your internet connection and try again.".to_string())
++            }
++            AppError::Unauthorized => Some("Provide a valid API key.".to_string()),
++            AppError::UpstreamUnavailable { .. } => Some(
++                "Wait for the server to finish starting, or check the Runtime screen for its current status."
++                    .to_string(),
++            ),
++            AppError::InvalidTransition { .. }
++            | AppError::NotFound { .. }
++            | AppError::Io { .. }
++            | AppError::Database { .. }
++            | AppError::GgufParse { .. }
++            | AppError::Internal { .. } => None,
++        }
++    }
++}
++
+ // ─── Environment ────────────────────────────────────────────────
+ 
+ /// Open on purpose: a CUDA major the binary has never heard of must be
+@@ -1225,4 +1314,198 @@ mod tests {
+         assert_ts_contains(&ts, "PortInUse");
+         assert_ts_contains(&ts, "InvalidTransition");
+     }
++
++    /// One instance of every `AppError` variant, in `docs/TASKS.md`
++    /// declaration order. Shared by the two tests below so both read from
++    /// the same list rather than two hand-kept copies that could drift —
++    /// the count assertion in `code_values_are_unique_across_variants`
++    /// only means something if this is the one place the full set lives.
++    fn all_app_error_variants() -> Vec<AppError> {
++        vec![
++            AppError::InvalidTransition {
++                from: "Stopped".into(),
++                command: "stop_server".into(),
++            },
++            AppError::NotFound {
++                what: "model".into(),
++            },
++            AppError::Io {
++                message: "disk full".into(),
++            },
++            AppError::Database {
++                message: "database is locked".into(),
++            },
++            AppError::Network {
++                message: "connection reset".into(),
++            },
++            AppError::RateLimited {
++                retry_after_seconds: 30,
++            },
++            AppError::ChecksumMismatch {
++                expected: "aaa".into(),
++                actual: "bbb".into(),
++            },
++            AppError::UnsafeArchiveEntry {
++                entry: "../evil".into(),
++            },
++            AppError::InvalidPath {
++                path: "C:/".into(),
++                reason: "root not allowed".into(),
++            },
++            AppError::GgufParse {
++                message: "bad magic".into(),
++            },
++            AppError::PortInUse { port: 8080 },
++            AppError::UpstreamUnavailable {
++                state: "Stopped".into(),
++            },
++            AppError::Unauthorized,
++            AppError::SchemaTooNew { found: 3, known: 2 },
++            AppError::Internal {
++                message: "unreachable".into(),
++            },
++        ]
++    }
++
++    #[test]
++    fn every_app_error_variant_has_a_serialized_shape() {
++        // T-004 acceptance: "Every variant has a test asserting its
++        // serialized shape." `app_error_round_trips` above already covers
++        // three variants plus a full round trip and TS export presence;
++        // this test is the complete, one-assertion-per-variant sweep,
++        // independent of that one so removing/changing either does not
++        // silently drop the other's coverage.
++        assert_eq!(
++            serde_json::to_value(AppError::InvalidTransition {
++                from: "Stopped".into(),
++                command: "stop_server".into(),
++            })
++            .unwrap(),
++            json!({"kind": "InvalidTransition", "detail": {"from": "Stopped", "command": "stop_server"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::NotFound {
++                what: "model".into()
++            })
++            .unwrap(),
++            json!({"kind": "NotFound", "detail": {"what": "model"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::Io {
++                message: "disk full".into()
++            })
++            .unwrap(),
++            json!({"kind": "Io", "detail": {"message": "disk full"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::Database {
++                message: "database is locked".into()
++            })
++            .unwrap(),
++            json!({"kind": "Database", "detail": {"message": "database is locked"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::Network {
++                message: "connection reset".into()
++            })
++            .unwrap(),
++            json!({"kind": "Network", "detail": {"message": "connection reset"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::RateLimited {
++                retry_after_seconds: 30
++            })
++            .unwrap(),
++            json!({"kind": "RateLimited", "detail": {"retry_after_seconds": 30}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::ChecksumMismatch {
++                expected: "aaa".into(),
++                actual: "bbb".into(),
++            })
++            .unwrap(),
++            json!({"kind": "ChecksumMismatch", "detail": {"expected": "aaa", "actual": "bbb"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::UnsafeArchiveEntry {
++                entry: "../evil".into()
++            })
++            .unwrap(),
++            json!({"kind": "UnsafeArchiveEntry", "detail": {"entry": "../evil"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::InvalidPath {
++                path: "C:/".into(),
++                reason: "root not allowed".into(),
++            })
++            .unwrap(),
++            json!({"kind": "InvalidPath", "detail": {"path": "C:/", "reason": "root not allowed"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::GgufParse {
++                message: "bad magic".into()
++            })
++            .unwrap(),
++            json!({"kind": "GgufParse", "detail": {"message": "bad magic"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::PortInUse { port: 8080 }).unwrap(),
++            json!({"kind": "PortInUse", "detail": {"port": 8080}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::UpstreamUnavailable {
++                state: "Stopped".into()
++            })
++            .unwrap(),
++            json!({"kind": "UpstreamUnavailable", "detail": {"state": "Stopped"}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::Unauthorized).unwrap(),
++            json!({"kind": "Unauthorized"})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::SchemaTooNew { found: 3, known: 2 }).unwrap(),
++            json!({"kind": "SchemaTooNew", "detail": {"found": 3, "known": 2}})
++        );
++        assert_eq!(
++            serde_json::to_value(AppError::Internal {
++                message: "unreachable".into()
++            })
++            .unwrap(),
++            json!({"kind": "Internal", "detail": {"message": "unreachable"}})
++        );
++
++        // Every variant above must also appear in `all_app_error_variants`,
++        // or the uniqueness and non-empty-message sweeps below are not
++        // actually exercising it. 15 variants as of this writing — update
++        // this constant, the match arms in `code()`/`remediation()`, and
++        // `all_app_error_variants` together when a variant is added.
++        assert_eq!(all_app_error_variants().len(), 15);
++    }
++
++    #[test]
++    fn no_variant_message_is_empty() {
++        for err in all_app_error_variants() {
++            assert!(
++                !err.message().is_empty(),
++                "{err:?}.message() was empty"
++            );
++        }
++    }
++
++    #[test]
++    fn code_values_are_unique_across_variants() {
++        let variants = all_app_error_variants();
++        let codes: Vec<&'static str> = variants.iter().map(AppError::code).collect();
++
++        let mut sorted = codes.clone();
++        sorted.sort_unstable();
++        sorted.dedup();
++
++        assert_eq!(
++            sorted.len(),
++            codes.len(),
++            "AppError::code() values must be unique across variants; got: {codes:?}"
++        );
++    }
+ }
+-- 
+2.34.1
+
