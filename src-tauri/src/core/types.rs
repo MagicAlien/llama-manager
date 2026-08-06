@@ -76,6 +76,95 @@ pub enum AppError {
     Internal { message: String },
 }
 
+/// `docs/CONTRACTS.md` §1 declares this `impl` block's signature directly
+/// beneath the enum, in the same code fence (commented `// core/src/types.rs`)
+/// — settling where it belongs before T-004 ever had to guess. `PLAN.md`'s
+/// "Repository layout" section separately shows `src-tauri/src/error.rs` as
+/// a sibling of `core/`, `db/` and `ipc/`, which this PR does not create:
+/// no task populates that file under CONTRACTS.md's design, so the diagram
+/// entry is stale rather than a second, competing instruction. Recorded as
+/// D-011 rather than silently dropped.
+impl AppError {
+    /// Stable, machine-readable identifier. One arm per variant, so a
+    /// missing arm is a compile error, not a silently-shared default —
+    /// uniqueness is enforced by construction here and re-asserted by
+    /// `code_values_are_unique_across_variants` below so a future variant
+    /// added without updating this match cannot collide by accident.
+    pub fn code(&self) -> &'static str {
+        match self {
+            AppError::InvalidTransition { .. } => "invalid_transition",
+            AppError::NotFound { .. } => "not_found",
+            AppError::Io { .. } => "io",
+            AppError::Database { .. } => "database",
+            AppError::Network { .. } => "network",
+            AppError::RateLimited { .. } => "rate_limited",
+            AppError::ChecksumMismatch { .. } => "checksum_mismatch",
+            AppError::UnsafeArchiveEntry { .. } => "unsafe_archive_entry",
+            AppError::InvalidPath { .. } => "invalid_path",
+            AppError::GgufParse { .. } => "gguf_parse",
+            AppError::PortInUse { .. } => "port_in_use",
+            AppError::UpstreamUnavailable { .. } => "upstream_unavailable",
+            AppError::Unauthorized => "unauthorized",
+            AppError::SchemaTooNew { .. } => "schema_too_new",
+            AppError::Internal { .. } => "internal",
+        }
+    }
+
+    /// User-facing, never empty. Delegates to the `Display` impl
+    /// `thiserror::Error` generates from each variant's `#[error("...")]`
+    /// string above, so the wording is written once, not twice in a way
+    /// that could drift — `no_variant_message_is_empty` asserts the
+    /// "never empty" half, and it holds for every variant here because
+    /// every `#[error(...)]` string above is itself non-empty.
+    pub fn message(&self) -> String {
+        self.to_string()
+    }
+
+    /// An actionable next step, where one exists. `None` for variants
+    /// where the honest remediation is "this is a bug, file a report" or
+    /// "retry" with nothing more specific to say — a fabricated
+    /// suggestion is worse than none.
+    pub fn remediation(&self) -> Option<String> {
+        match self {
+            AppError::PortInUse { port } => Some(format!(
+                "Choose a different port than {port}, or stop whatever else on this machine is using it."
+            )),
+            AppError::RateLimited {
+                retry_after_seconds,
+            } => Some(format!("Wait {retry_after_seconds}s, then retry.")),
+            AppError::ChecksumMismatch { .. } => Some(
+                "The downloaded file does not match its expected checksum. Delete it and retry the download."
+                    .to_string(),
+            ),
+            AppError::UnsafeArchiveEntry { .. } => Some(
+                "This archive was rejected because an entry inside it would write outside the install directory. Do not use it, and report it if it came from an official release."
+                    .to_string(),
+            ),
+            AppError::InvalidPath { .. } => {
+                Some("Check the path and try again.".to_string())
+            }
+            AppError::SchemaTooNew { .. } => Some(
+                "This database was created by a newer version of the app. Update the app before opening it again."
+                    .to_string(),
+            ),
+            AppError::Network { .. } => {
+                Some("Check your internet connection and try again.".to_string())
+            }
+            AppError::Unauthorized => Some("Provide a valid API key.".to_string()),
+            AppError::UpstreamUnavailable { .. } => Some(
+                "Wait for the server to finish starting, or check the Runtime screen for its current status."
+                    .to_string(),
+            ),
+            AppError::InvalidTransition { .. }
+            | AppError::NotFound { .. }
+            | AppError::Io { .. }
+            | AppError::Database { .. }
+            | AppError::GgufParse { .. }
+            | AppError::Internal { .. } => None,
+        }
+    }
+}
+
 // ─── Environment ────────────────────────────────────────────────
 
 /// Open on purpose: a CUDA major the binary has never heard of must be
@@ -1224,5 +1313,196 @@ mod tests {
         assert_ts_contains(&ts, "Unauthorized");
         assert_ts_contains(&ts, "PortInUse");
         assert_ts_contains(&ts, "InvalidTransition");
+    }
+
+    /// One instance of every `AppError` variant, in `docs/TASKS.md`
+    /// declaration order. Shared by the two tests below so both read from
+    /// the same list rather than two hand-kept copies that could drift —
+    /// the count assertion in `code_values_are_unique_across_variants`
+    /// only means something if this is the one place the full set lives.
+    fn all_app_error_variants() -> Vec<AppError> {
+        vec![
+            AppError::InvalidTransition {
+                from: "Stopped".into(),
+                command: "stop_server".into(),
+            },
+            AppError::NotFound {
+                what: "model".into(),
+            },
+            AppError::Io {
+                message: "disk full".into(),
+            },
+            AppError::Database {
+                message: "database is locked".into(),
+            },
+            AppError::Network {
+                message: "connection reset".into(),
+            },
+            AppError::RateLimited {
+                retry_after_seconds: 30,
+            },
+            AppError::ChecksumMismatch {
+                expected: "aaa".into(),
+                actual: "bbb".into(),
+            },
+            AppError::UnsafeArchiveEntry {
+                entry: "../evil".into(),
+            },
+            AppError::InvalidPath {
+                path: "C:/".into(),
+                reason: "root not allowed".into(),
+            },
+            AppError::GgufParse {
+                message: "bad magic".into(),
+            },
+            AppError::PortInUse { port: 8080 },
+            AppError::UpstreamUnavailable {
+                state: "Stopped".into(),
+            },
+            AppError::Unauthorized,
+            AppError::SchemaTooNew { found: 3, known: 2 },
+            AppError::Internal {
+                message: "unreachable".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn every_app_error_variant_has_a_serialized_shape() {
+        // T-004 acceptance: "Every variant has a test asserting its
+        // serialized shape." `app_error_round_trips` above already covers
+        // three variants plus a full round trip and TS export presence;
+        // this test is the complete, one-assertion-per-variant sweep,
+        // independent of that one so removing/changing either does not
+        // silently drop the other's coverage.
+        assert_eq!(
+            serde_json::to_value(AppError::InvalidTransition {
+                from: "Stopped".into(),
+                command: "stop_server".into(),
+            })
+            .unwrap(),
+            json!({"kind": "InvalidTransition", "detail": {"from": "Stopped", "command": "stop_server"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::NotFound {
+                what: "model".into()
+            })
+            .unwrap(),
+            json!({"kind": "NotFound", "detail": {"what": "model"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::Io {
+                message: "disk full".into()
+            })
+            .unwrap(),
+            json!({"kind": "Io", "detail": {"message": "disk full"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::Database {
+                message: "database is locked".into()
+            })
+            .unwrap(),
+            json!({"kind": "Database", "detail": {"message": "database is locked"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::Network {
+                message: "connection reset".into()
+            })
+            .unwrap(),
+            json!({"kind": "Network", "detail": {"message": "connection reset"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::RateLimited {
+                retry_after_seconds: 30
+            })
+            .unwrap(),
+            json!({"kind": "RateLimited", "detail": {"retry_after_seconds": 30}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::ChecksumMismatch {
+                expected: "aaa".into(),
+                actual: "bbb".into(),
+            })
+            .unwrap(),
+            json!({"kind": "ChecksumMismatch", "detail": {"expected": "aaa", "actual": "bbb"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::UnsafeArchiveEntry {
+                entry: "../evil".into()
+            })
+            .unwrap(),
+            json!({"kind": "UnsafeArchiveEntry", "detail": {"entry": "../evil"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::InvalidPath {
+                path: "C:/".into(),
+                reason: "root not allowed".into(),
+            })
+            .unwrap(),
+            json!({"kind": "InvalidPath", "detail": {"path": "C:/", "reason": "root not allowed"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::GgufParse {
+                message: "bad magic".into()
+            })
+            .unwrap(),
+            json!({"kind": "GgufParse", "detail": {"message": "bad magic"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::PortInUse { port: 8080 }).unwrap(),
+            json!({"kind": "PortInUse", "detail": {"port": 8080}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::UpstreamUnavailable {
+                state: "Stopped".into()
+            })
+            .unwrap(),
+            json!({"kind": "UpstreamUnavailable", "detail": {"state": "Stopped"}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::Unauthorized).unwrap(),
+            json!({"kind": "Unauthorized"})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::SchemaTooNew { found: 3, known: 2 }).unwrap(),
+            json!({"kind": "SchemaTooNew", "detail": {"found": 3, "known": 2}})
+        );
+        assert_eq!(
+            serde_json::to_value(AppError::Internal {
+                message: "unreachable".into()
+            })
+            .unwrap(),
+            json!({"kind": "Internal", "detail": {"message": "unreachable"}})
+        );
+
+        // Every variant above must also appear in `all_app_error_variants`,
+        // or the uniqueness and non-empty-message sweeps below are not
+        // actually exercising it. 15 variants as of this writing — update
+        // this constant, the match arms in `code()`/`remediation()`, and
+        // `all_app_error_variants` together when a variant is added.
+        assert_eq!(all_app_error_variants().len(), 15);
+    }
+
+    #[test]
+    fn no_variant_message_is_empty() {
+        for err in all_app_error_variants() {
+            assert!(!err.message().is_empty(), "{err:?}.message() was empty");
+        }
+    }
+
+    #[test]
+    fn code_values_are_unique_across_variants() {
+        let variants = all_app_error_variants();
+        let codes: Vec<&'static str> = variants.iter().map(AppError::code).collect();
+
+        let mut sorted = codes.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+
+        assert_eq!(
+            sorted.len(),
+            codes.len(),
+            "AppError::code() values must be unique across variants; got: {codes:?}"
+        );
     }
 }

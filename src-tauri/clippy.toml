@@ -1,0 +1,10 @@
+# `clippy::unwrap_used` / `clippy::expect_used` are enabled (as `deny`) at
+# module scope in `core/mod.rs` (and `ipc/mod.rs`, once that module exists —
+# AGENTS.md invariant 6 names both). These two options are what makes "outside
+# tests" true rather than aspirational: without them, both lints fire inside
+# `#[cfg(test)]` code too, and the realistic alternative is `#[allow(...)]`
+# sprinkled over every test function, which is worse than the lint it is
+# working around. `db/` and `main.rs` are deliberately not in scope here —
+# invariant 6 names `core/` and `ipc/` only.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
