@@ -121,14 +121,13 @@ pub fn probe(provider: &dyn NvmlProvider, listen_port: u16) -> EnvironmentReport
 // ─── GPU checks ─────────────────────────────────────────────────────────
 
 fn probe_gpus(provider: &dyn NvmlProvider) -> (Vec<GpuInfo>, Vec<HealthCheck>) {
-    let count = match provider.device_count() {
-        Ok(n) => n,
-        // A typed error here (no driver, NVML not installed, `Nvml::init`
-        // failed) is indistinguishable from "no GPU" for reporting
-        // purposes — either way there is nothing to enumerate, and the
-        // failure must not propagate as a panic.
-        Err(_) => 0,
-    };
+    // A typed error here (no driver, NVML not installed, `Nvml::init`
+    // failed) is indistinguishable from "no GPU" for reporting purposes —
+    // either way there is nothing to enumerate, and the failure must not
+    // propagate as a panic. `unwrap_or_default()` rather than a `match`
+    // per `cargo clippy`'s own `manual_unwrap_or_default` finding (real
+    // gate run, first fixup — PROGRESS.md).
+    let count = provider.device_count().unwrap_or_default();
 
     if count == 0 {
         return (Vec::new(), no_gpu_checks());
