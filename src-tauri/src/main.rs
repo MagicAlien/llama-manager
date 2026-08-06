@@ -1,11 +1,16 @@
 // Entry point only. `AGENTS.md` invariant 1: `core/` and `ipc/` hold the
-// logic. `core/` exists as of T-002 (types only, so far); `ipc/` (the Tauri
-// command handlers) does not yet — nothing in `docs/CONTRACTS.md` §4 is
-// implemented until the task named in its "Implemented by" column runs.
+// logic. `ipc/` exists as of T-010 (`probe_environment` only, so far) —
+// nothing in `docs/CONTRACTS.md` §4 is implemented until the task named in
+// its "Implemented by" column runs. Registering commands with Tauri's
+// `invoke_handler` (`tauri::generate_handler![...]`) is deliberately not
+// done here yet: T-010's scope is `core/` and `ipc/` only, and wiring a
+// command into the running app is the first screen-side task that needs
+// it (T-011 depends on this task; see PROGRESS.md Observations).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
 mod db;
+mod ipc;
 
 use std::path::PathBuf;
 
