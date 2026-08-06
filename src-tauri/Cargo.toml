@@ -35,6 +35,24 @@ ts-rs = { version = "12", features = ["chrono-impl"] }
 # vendored SQLite instead of requiring one on the build machine, matching
 # `docs/DEV-SETUP.md`'s "no toolchain component beyond Rust + MSVC" story.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# T-010 (docs/CONTRACTS.md §6, core/env_probe.rs): GPU access via NVML.
+# Approved, PLAN.md §3 ("GPU telemetry" row). Version is this session's
+# best guess (no Rust toolchain to let `cargo add` resolve it for real,
+# see PROGRESS.md) — treat as unverified until a real `cargo build` runs.
+nvml-wrapper = "0.10"
+# T-010: system RAM, free disk space and the OS build string have no std
+# API on Windows. `windows` is already approved (PLAN.md §3), scoped in
+# that list's own parenthetical to "DPAPI, junctions" — this task uses it
+# for the first time beyond that scope, justified per AGENTS.md §4 the same
+# way chrono was in T-002 (PROGRESS.md D-008): the crate itself is already
+# approved, and there is no alternative on this platform. Feature list and
+# exact version are also this session's best guess, same caveat as above.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+]}
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
