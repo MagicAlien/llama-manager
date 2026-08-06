@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* T-005: no unstyled default HTML. html/body/#root get their
+   background and text colour from the token palette (tailwind.config.js)
+   before any component renders, so there is never a flash of
+   unstyled/browser-default white. */
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full bg-background font-sans text-foreground antialiased;
+  }
+}

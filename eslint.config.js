@@ -45,6 +45,12 @@ export default [
         "warn",
         { allowConstantExport: true },
       ],
+      // TypeScript already checks this, more accurately: core `no-undef`
+      // doesn't see ambient global types (e.g. the global `JSX`
+      // namespace @types/react declares), so it false-positives on
+      // code `tsc` accepts. Well-known typescript-eslint guidance, not
+      // scoped to T-005 — https://typescript-eslint.io/troubleshooting/faqs/general/#i-get-errors-from-the-no-undef-rule-about-various-typescript-types-i-use-in-my-code-such-as-nodejs
+      "no-undef": "off",
     },
   },
   {
@@ -66,6 +72,59 @@ export default [
           selector: "TSInterfaceDeclaration",
           message:
             "src/lib/ipc.ts must import types from ./types, not declare them inline (docs/adr/adr-001-type-generation.md).",
+        },
+      ],
+    },
+  },
+  {
+    // T-005 / docs/TASKS.md T-005 acceptance criteria: "Colours,
+    // spacing and type sizes come from tokens — a lint rule rejects
+    // hard-coded hex values and arbitrary pixel spacing in
+    // components" and "A lint rule rejects string literals in JSX
+    // text positions" (AGENTS.md invariant 7).
+    //
+    // Scoped to the component-authoring surface only — src/components,
+    // src/screens and src/App.tsx — following the same narrow-scoping
+    // pattern as the src/lib/ipc.ts block above, not applied blanket.
+    // In particular this does NOT cover tailwind.config.js (the
+    // tokens file itself, which legitimately contains hex values and
+    // numeric spacing steps) or src/lib/strings.ts (which legitimately
+    // contains the user-facing string literals JSX is meant to
+    // reference instead of embedding inline). Test files are excluded
+    // too: they assert behaviour, not visual design, and forcing
+    // fixture/expectation strings through strings.ts would fight the
+    // rule's own purpose.
+    files: ["src/components/**/*.tsx", "src/screens/**/*.tsx", "src/App.tsx"],
+    ignores: ["**/*.test.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          // Matches a hex colour anywhere inside a string literal —
+          // both a bare `"#1a1a1a"` and Tailwind arbitrary-value
+          // syntax like `"bg-[#1a1a1a]"`. Colours belong in
+          // tailwind.config.js's token palette and are reached via a
+          // named utility class (`bg-surface`, `text-accent`, …).
+          selector: "Literal[value=/#(?:[0-9a-fA-F]{3,4}){1,2}\\b/]",
+          message:
+            "No hard-coded hex colours in components — add the colour to the token palette in tailwind.config.js and use a named utility class (docs/TASKS.md T-005).",
+        },
+        {
+          // Matches Tailwind's arbitrary-value bracket syntax with a
+          // px unit, e.g. `"p-[13px]"`, `"mt-[3px]"`. Spacing belongs
+          // to the scale declared in tailwind.config.js; a bracketed
+          // pixel value bypasses it.
+          selector: "Literal[value=/\\[-?\\d+(?:\\.\\d+)?px\\]/]",
+          message:
+            "No arbitrary pixel spacing in components — use a spacing-scale utility class from tailwind.config.js's tokens instead of a bracketed px value (docs/TASKS.md T-005).",
+        },
+        {
+          // Matches non-whitespace JSX text content, e.g. `<p>Hello</p>`.
+          // `<p>{strings.foo}</p>` is unaffected — that's an expression
+          // container, not a JSXText node.
+          selector: "JSXText[value=/\\S/]",
+          message:
+            "No string literals in JSX text positions — add the string to src/lib/strings.ts and render it as an expression (AGENTS.md invariant 7).",
         },
       ],
     },
