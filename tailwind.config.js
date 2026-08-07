@@ -34,6 +34,13 @@ export default {
       "accent-foreground": "#f5f6ff",
       destructive: "#e5484d",
       "destructive-foreground": "#fdf4f4",
+
+      // Health-check traffic lights (docs/TASKS.md T-011). `Fail`
+      // reuses `destructive` rather than duplicating red under a second
+      // name. No `Warn`/`Pass` equivalent existed before this task since
+      // nothing rendered `CheckStatus` until now.
+      pass: "#3dd68c",
+      warn: "#e5a83d",
     },
 
     // Explicit 4px-base spacing scale (0 – 24rem in 0.25rem steps),

@@ -13,15 +13,14 @@
 //! `#![deny(clippy::unwrap_used, clippy::expect_used)]` line the moment it
 //! exists (`AGENTS.md` invariant 6 names both `core/` and `ipc/`) — copied
 //! verbatim below.
+//!
+//! `main.rs` registers `probe_environment` with `tauri::generate_handler!`
+//! as of T-011 (docs/TASKS.md T-011), which is why the `#[allow(dead_code)]`
+//! T-010 left here is gone: the command now has a real caller reachable
+//! from the binary's own entry point, not just a compiling-but-unrooted
+//! function.
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
-// Same rationale as the identical allow in `core/types.rs`, `db/mod.rs`
-// and `db/queries.rs`: in a `bin` crate (this one; no `src-tauri/src/lib.rs`),
-// `pub` alone does not exempt an item from `dead_code`, and nothing calls
-// `probe_environment` yet — `main.rs` deliberately does not register it with
-// `tauri::generate_handler!` in this task (see the comment there). Whichever
-// task wires the first `invoke_handler` should remove this allow.
-#![allow(dead_code)]
 
 use crate::core::env_probe;
 use crate::core::types::{AppError, EnvironmentReport};

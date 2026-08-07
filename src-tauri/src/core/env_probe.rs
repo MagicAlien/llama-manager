@@ -30,7 +30,12 @@
 //! - `disk_space`'s Warn/Fail thresholds have no source to cite at all —
 //!   an ordinary implementation choice, not a project fact, and reversible
 //!   without affecting any other task.
-#![allow(dead_code)] // RealNvmlProvider is not wired into `ipc/` invocation from a UI yet
+//!
+//! T-010 left `#[allow(dead_code)]` here because nothing rooted this
+//! module from the binary's own entry point yet. T-011 (docs/TASKS.md
+//! T-011) wires `ipc::probe_environment` into `main.rs`'s
+//! `invoke_handler`, which calls `RealNvmlProvider` and `probe` directly —
+//! the allow is removed accordingly.
 
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::sync::OnceLock;

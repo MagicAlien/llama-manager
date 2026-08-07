@@ -1,11 +1,15 @@
 // Entry point only. `AGENTS.md` invariant 1: `core/` and `ipc/` hold the
 // logic. `ipc/` exists as of T-010 (`probe_environment` only, so far) —
 // nothing in `docs/CONTRACTS.md` §4 is implemented until the task named in
-// its "Implemented by" column runs. Registering commands with Tauri's
-// `invoke_handler` (`tauri::generate_handler![...]`) is deliberately not
-// done here yet: T-010's scope is `core/` and `ipc/` only, and wiring a
-// command into the running app is the first screen-side task that needs
-// it (T-011 depends on this task; see PROGRESS.md Observations).
+// its "Implemented by" column runs. `invoke_handler` now registers
+// `ipc::probe_environment` (T-011, docs/TASKS.md T-011) — T-010 deliberately
+// left this out of its own scope (`core/` and `ipc/` only) since it was the
+// first screen-side task that needed a real command to call, per
+// PROGRESS.md's Observation naming this task. This line sits slightly
+// outside T-005's "frontend only" precedent for a screen task, noted as a
+// plain note in PROGRESS.md rather than a Discrepancy: it's necessary
+// plumbing no earlier task had to do, not reality diverging from a
+// document.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod core;
@@ -75,6 +79,7 @@ fn main() {
     tracing::info!("llama-manager starting");
 
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![ipc::probe_environment])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
