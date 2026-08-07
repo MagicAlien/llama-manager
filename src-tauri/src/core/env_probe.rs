@@ -50,6 +50,14 @@ use crate::core::types::{AppError, CheckStatus, EnvironmentReport, GpuInfo, GpuT
 pub trait NvmlProvider: Send + Sync {
     fn device_count(&self) -> Result<u32, AppError>;
     fn device_info(&self, index: u32) -> Result<GpuInfo, AppError>;
+    // Not called by `probe()` or anything else yet — reserved for a
+    // future GPU telemetry view (T-060/T-061, named above). Real
+    // `cargo build` output (T-011 PR review) confirmed this is now the
+    // only dead-code warning left once the module-wide `#![allow(dead_code)]`
+    // T-010 added was removed; scoped here rather than reintroducing
+    // that module-wide allow, since everything else in this module now
+    // has a real caller.
+    #[allow(dead_code)]
     fn device_telemetry(&self, index: u32) -> Result<GpuTelemetry, AppError>;
     fn driver_version(&self) -> Result<String, AppError>;
 }
