@@ -32,6 +32,33 @@ export const strings = {
       initial: "R",
       title: "Runtime",
       description: "Start, stop and monitor the llama-server process.",
+      // T-011: the health-check screen is this route's first-run view,
+      // not an eighth route (docs/TASKS.md T-011) — its copy nests here
+      // rather than getting a sibling top-level entry.
+      healthCheck: {
+        heading: "Environment health",
+        refresh: "Refresh",
+        loadingLabel: "Checking environment",
+        errorBody: "The environment probe failed. Try refreshing.",
+        remediationLabel: "How to fix:",
+        statusLabels: {
+          Pass: "Pass",
+          Warn: "Warning",
+          Fail: "Fail",
+        },
+        // `HealthCheck.id`'s doc comment (src/lib/types.ts, T-002/T-010)
+        // enumerates exactly these five ids. An id outside this set
+        // (should the backend ever add one) falls back to a formatted
+        // version of the raw id rather than an empty label — see
+        // `checkLabel()` in Runtime.tsx.
+        checkLabels: {
+          gpu_present: "GPU detected",
+          driver_ok: "Driver version",
+          cuda13_ok: "CUDA 13 support",
+          disk_space: "Disk space",
+          endpoint_bindable: "Endpoint port",
+        },
+      },
     },
     models: {
       navLabel: "Models",
