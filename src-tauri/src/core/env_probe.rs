@@ -40,7 +40,9 @@
 use std::net::{IpAddr, Ipv4Addr, TcpListener};
 use std::sync::OnceLock;
 
-use crate::core::types::{AppError, CheckStatus, EnvironmentReport, GpuInfo, GpuTelemetry, HealthCheck};
+use crate::core::types::{
+    AppError, CheckStatus, EnvironmentReport, GpuInfo, GpuTelemetry, HealthCheck,
+};
 
 // ─── Provider traits (`docs/CONTRACTS.md` §6) ──────────────────────────
 
@@ -193,7 +195,8 @@ fn no_gpu_checks() -> Vec<HealthCheck> {
         HealthCheck {
             id: "cuda13_ok".to_string(),
             status: CheckStatus::Fail,
-            message: "No NVIDIA driver was detected; CUDA 13 support cannot be confirmed.".to_string(),
+            message: "No NVIDIA driver was detected; CUDA 13 support cannot be confirmed."
+                .to_string(),
             remediation: remediation(),
         },
     ]
@@ -236,7 +239,9 @@ fn driver_checks(gpus: &[GpuInfo], system_driver: Option<&str>) -> Vec<HealthChe
         Some(_) => HealthCheck {
             id: "driver_ok".to_string(),
             status: CheckStatus::Fail,
-            message: format!("NVIDIA driver {shown} is too old (need {MIN_DRIVER_MAJOR_GENERAL}+)."),
+            message: format!(
+                "NVIDIA driver {shown} is too old (need {MIN_DRIVER_MAJOR_GENERAL}+)."
+            ),
             remediation: Some("Update your NVIDIA driver from nvidia.com/drivers.".to_string()),
         },
         None => HealthCheck {
@@ -257,13 +262,17 @@ fn driver_checks(gpus: &[GpuInfo], system_driver: Option<&str>) -> Vec<HealthChe
         Some(_) => HealthCheck {
             id: "cuda13_ok".to_string(),
             status: CheckStatus::Fail,
-            message: format!("NVIDIA driver {shown} does not support CUDA 13 (need {MIN_DRIVER_MAJOR_CUDA13}+)."),
+            message: format!(
+                "NVIDIA driver {shown} does not support CUDA 13 (need {MIN_DRIVER_MAJOR_CUDA13}+)."
+            ),
             remediation: Some("Update your NVIDIA driver from nvidia.com/drivers.".to_string()),
         },
         None => HealthCheck {
             id: "cuda13_ok".to_string(),
             status: CheckStatus::Fail,
-            message: "NVIDIA driver version could not be read; CUDA 13 support cannot be confirmed.".to_string(),
+            message:
+                "NVIDIA driver version could not be read; CUDA 13 support cannot be confirmed."
+                    .to_string(),
             remediation: Some("Update your NVIDIA driver from nvidia.com/drivers.".to_string()),
         },
     };
@@ -286,7 +295,9 @@ fn disk_status(free_bytes: u64) -> HealthCheck {
             id: "disk_space".to_string(),
             status: CheckStatus::Fail,
             message: format!("Only {} GiB free.", gib(free_bytes)),
-            remediation: Some("Free up disk space before installing a runtime or model.".to_string()),
+            remediation: Some(
+                "Free up disk space before installing a runtime or model.".to_string(),
+            ),
         }
     } else if free_bytes < DISK_WARN_BELOW_BYTES {
         HealthCheck {
@@ -418,7 +429,9 @@ fn os_build_string() -> String {
 /// tooling reads.
 fn read_current_version() -> Option<(String, Option<String>, Option<u32>)> {
     use windows::core::w;
-    use windows::Win32::System::Registry::{RegCloseKey, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ};
+    use windows::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE, KEY_READ,
+    };
 
     let mut hkey = HKEY::default();
     // SAFETY: `hkey` is only ever read through the registry API below and
@@ -436,7 +449,8 @@ fn read_current_version() -> Option<(String, Option<String>, Option<u32>)> {
         return None;
     }
 
-    let product_name = read_registry_string(hkey, w!("ProductName")).unwrap_or_else(|| "Windows".to_string());
+    let product_name =
+        read_registry_string(hkey, w!("ProductName")).unwrap_or_else(|| "Windows".to_string());
     let build = read_registry_string(hkey, w!("CurrentBuildNumber"));
     let ubr = read_registry_u32(hkey, w!("UBR"));
 
@@ -447,7 +461,10 @@ fn read_current_version() -> Option<(String, Option<String>, Option<u32>)> {
     Some((product_name, build, ubr))
 }
 
-fn read_registry_string(hkey: windows::Win32::System::Registry::HKEY, name: windows::core::PCWSTR) -> Option<String> {
+fn read_registry_string(
+    hkey: windows::Win32::System::Registry::HKEY,
+    name: windows::core::PCWSTR,
+) -> Option<String> {
     use windows::Win32::System::Registry::RegQueryValueExW;
 
     let mut byte_len: u32 = 0;
@@ -481,7 +498,10 @@ fn read_registry_string(hkey: windows::Win32::System::Registry::HKEY, name: wind
     Some(String::from_utf16_lossy(&buffer[..end]))
 }
 
-fn read_registry_u32(hkey: windows::Win32::System::Registry::HKEY, name: windows::core::PCWSTR) -> Option<u32> {
+fn read_registry_u32(
+    hkey: windows::Win32::System::Registry::HKEY,
+    name: windows::core::PCWSTR,
+) -> Option<u32> {
     use windows::Win32::System::Registry::RegQueryValueExW;
 
     let mut value: u32 = 0;
@@ -624,14 +644,11 @@ mod tests {
         }
 
         fn device_info(&self, index: u32) -> Result<GpuInfo, AppError> {
-            self.infos
-                .get(index as usize)
-                .cloned()
-                .unwrap_or_else(|| {
-                    Err(AppError::NotFound {
-                        what: format!("gpu index {index}"),
-                    })
+            self.infos.get(index as usize).cloned().unwrap_or_else(|| {
+                Err(AppError::NotFound {
+                    what: format!("gpu index {index}"),
                 })
+            })
         }
 
         fn device_telemetry(&self, _index: u32) -> Result<GpuTelemetry, AppError> {
@@ -693,10 +710,7 @@ mod tests {
         for check in &report.checks {
             if !matches!(check.status, CheckStatus::Pass) {
                 assert!(
-                    check
-                        .remediation
-                        .as_ref()
-                        .is_some_and(|r| !r.is_empty()),
+                    check.remediation.as_ref().is_some_and(|r| !r.is_empty()),
                     "check `{}` is {:?} but has no remediation",
                     check.id,
                     check.status
@@ -817,12 +831,10 @@ mod tests {
 
         assert!(report.gpus.is_empty());
         assert_check_status(&report, "gpu_present", CheckStatus::Fail);
-        assert!(
-            find_check(&report, "gpu_present")
-                .remediation
-                .as_ref()
-                .is_some_and(|r| !r.is_empty())
-        );
+        assert!(find_check(&report, "gpu_present")
+            .remediation
+            .as_ref()
+            .is_some_and(|r| !r.is_empty()));
         assert_remediation_invariant(&report);
     }
 
@@ -888,7 +900,10 @@ mod tests {
         // Proves the port was released, not just reported free: bind it
         // again ourselves, which only succeeds if nothing still holds it.
         let relisten = TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), port));
-        assert!(relisten.is_ok(), "port {port} was not released after the check");
+        assert!(
+            relisten.is_ok(),
+            "port {port} was not released after the check"
+        );
     }
 
     #[test]
@@ -975,7 +990,13 @@ mod tests {
         ids.sort_unstable();
         assert_eq!(
             ids,
-            vec!["cuda13_ok", "disk_space", "driver_ok", "endpoint_bindable", "gpu_present"]
+            vec![
+                "cuda13_ok",
+                "disk_space",
+                "driver_ok",
+                "endpoint_bindable",
+                "gpu_present"
+            ]
         );
     }
 }
