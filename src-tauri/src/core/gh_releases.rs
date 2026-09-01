@@ -314,9 +314,11 @@ mod tests {
     // ── Asset-name parser ──────────────────────────────────────────
 
     /// Table-driven over real asset names pulled from
-    /// `github.com/ggml-org/llama.cpp/releases` (the b10726 release page,
-    /// fetched 2026-08-31), plus one hypothetical name that demonstrates
-    /// the `PLAN.md` §2.13 open-enum case.
+    /// `github.com/ggml-org/llama.cpp/releases` (b10726 for the accepted and
+    /// rejected families; b5559 for the open-enum case, verified against a
+    /// live fetch of the b5559 release page). No name in this table is
+    /// invented: each either came straight from a release's asset list, or
+    /// is a real published name the parser must reject.
     #[test]
     fn parse_asset_name_table_driven() {
         let rows: &[(&str, Option<(&str, Backend)>)] = &[
@@ -337,12 +339,14 @@ mod tests {
                 "llama-b10726-bin-win-vulkan-x64.zip",
                 Some(("b10726", Backend::Vulkan)),
             ),
-            // Open-enum case (PLAN.md §2.13): a CUDA major the code has no
-            // branch for parses into Backend::Cuda { major } rather than
-            // failing.
+            // Open-enum case (PLAN.md §2.13): a REAL asset naming a CUDA
+            // major the code has no branch for parses into Backend::Cuda {
+            // major } rather than failing. `llama-b5559-bin-win-cuda-11.7-x64.zip`
+            // is a real llama.cpp release asset; 11 is not a major the code
+            // branches on, so the open enum must accept it.
             (
-                "llama-b10726-bin-win-cuda-99.9-x64.zip",
-                Some(("b10726", Backend::Cuda { major: 99 })),
+                "llama-b5559-bin-win-cuda-11.7-x64.zip",
+                Some(("b5559", Backend::Cuda { major: 11 })),
             ),
             // Rejected — real names that match no known pattern.
             ("llama-b10726-bin-win-rocm-7.14-x64.zip", None),
