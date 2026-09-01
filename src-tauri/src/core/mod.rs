@@ -19,4 +19,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod env_probe;
+pub mod gh_releases;
 pub mod types;

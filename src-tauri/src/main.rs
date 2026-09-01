@@ -79,7 +79,10 @@ fn main() {
     tracing::info!("llama-manager starting");
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![ipc::probe_environment])
+        .invoke_handler(tauri::generate_handler![
+            ipc::probe_environment,
+            ipc::check_for_updates
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

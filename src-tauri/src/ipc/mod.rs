@@ -23,7 +23,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::core::env_probe;
-use crate::core::types::{AppError, EnvironmentReport};
+use crate::core::gh_releases;
+use crate::core::types::{AppError, AvailableRelease, EnvironmentReport};
 
 /// `docs/CONTRACTS.md` §4: `probe_environment | — | EnvironmentReport | T-010`.
 ///
@@ -42,4 +43,25 @@ pub fn probe_environment() -> Result<EnvironmentReport, AppError> {
     // to 8080. `ServerConfig` is not wired to real persisted settings until
     // T-050, so there is no `ServerConfig::default()` to read here yet.
     Ok(env_probe::probe(&provider, env_probe::DEFAULT_LISTEN_PORT))
+}
+
+/// `docs/CONTRACTS.md` §4: `check_for_updates | — | Vec<AvailableRelease> | T-020`.
+///
+/// No arguments to deserialize. The real work — fetching the releases list,
+/// parsing asset names into `(build_tag, Backend)`, and picking the newest
+/// per backend — lives in `core::gh_releases`. `AGENTS.md` invariant 1: this
+/// handler only constructs a client, calls `core/`, and serializes the
+/// result.
+///
+/// The client is built fresh per call: a `reqwest::Client` owns its
+/// connection pool and TLS state, and a global one would be a piece of
+/// shared state with no `ServerState` to own it (invariant 2). The call is
+/// `async`, so Tauri runs it on its own executor — no `tokio::runtime`
+/// bootstrap is needed in the handler.
+#[tauri::command]
+pub async fn check_for_updates() -> Result<Vec<AvailableRelease>, AppError> {
+    let client = gh_releases::default_client().map_err(|err| AppError::Network {
+        message: format!("could not build the HTTP client: {err}"),
+    })?;
+    gh_releases::check_for_updates(&client, gh_releases::GITHUB_API_BASE).await
 }
