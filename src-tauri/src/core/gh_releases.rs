@@ -241,10 +241,12 @@ fn backend_key(backend: &Backend) -> BackendKey {
 /// `llama-b10726-xcframework.zip`.
 ///
 /// Accepted shape: `llama-b<digits>-bin-win-<variant>-x64.<ext>` where
-/// `<variant>` is `cpu`, `vulkan` or `cuda-<major>.<minor>`. A CUDA major
-/// the code has no branch for parses into `Backend::Cuda { major }` — the
-/// enum is open (`PLAN.md` §2.13); the parser fails on a major outside
-/// `u8`, never on an unfamiliar one.
+/// `<variant>` is `cpu`, `vulkan`, or `cuda-<major>.<minor>` (current
+/// scheme) or `cuda-cu<major>.<minor>` (the 2024–2025 scheme, a `cu`
+/// prefix on the version — both are real names in the llama.cpp corpus).
+/// A CUDA major the code has no branch for parses into `Backend::Cuda {
+/// major }` — the enum is open (`PLAN.md` §2.13); the parser fails on a
+/// major outside `u8`, never on an unfamiliar one.
 ///
 /// Everything else is `None`, never a panic: other platforms (`ubuntu`,
 /// `macos`, `android`, …), other backends (`rocm`, `sycl`, `opencl`,
@@ -278,8 +280,16 @@ pub fn parse_asset_name(name: &str) -> Option<(String, Backend)> {
         "vulkan" => Some((build_tag, Backend::Vulkan)),
         _ => variant
             .strip_prefix("cuda-")
-            .and_then(|version| version.split_once('.'))
-            .and_then(|(major, _minor)| major.parse::<u8>().ok())
+            .and_then(|version| {
+                // Two real naming schemes exist in the llama.cpp corpus:
+                // `cuda-12.4` (current) and `cuda-cu11.7.1` (2024–2025, a
+                // `cu` prefix on the version). Strip the optional `cu`
+                // prefix, then take the leading digit run as the major.
+                let version = version.strip_prefix("cu").unwrap_or(version);
+                version
+                    .split_once('.')
+                    .and_then(|(major, _minor)| major.parse::<u8>().ok())
+            })
             .map(|major| (build_tag, Backend::Cuda { major })),
     }
 }
@@ -347,6 +357,18 @@ mod tests {
             (
                 "llama-b5559-bin-win-cuda-11.7-x64.zip",
                 Some(("b5559", Backend::Cuda { major: 11 })),
+            ),
+            // Real 2024–2025 assets use a `cuda-cu<major>.<minor>` naming
+            // scheme (a `cu` prefix on the version). Both are real llama.cpp
+            // release assets; the parser must accept the scheme, not just the
+            // current `cuda-<major>.<minor>` form.
+            (
+                "llama-b3066-bin-win-cuda-cu11.7.1-x64.zip",
+                Some(("b3066", Backend::Cuda { major: 11 })),
+            ),
+            (
+                "llama-b3066-bin-win-cuda-cu12.2.0-x64.zip",
+                Some(("b3066", Backend::Cuda { major: 12 })),
             ),
             // Rejected — real names that match no known pattern.
             ("llama-b10726-bin-win-rocm-7.14-x64.zip", None),
