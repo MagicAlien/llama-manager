@@ -17,7 +17,7 @@ Last updated: 1 September 2026 — T-020 (GitHub Releases client) is **Done**, P
 
 ## In progress
 
-*(nothing — T-020 is Done, PR #11, merged into `main`. Take T-021 next — its dependency (T-020) is now `Done`; T-006 is still `Blocked` on D-005.)*
+- **T-021** — Backend selection · branch `t-021-backend-selection` · started 2 September 2026. Pure function from `EnvironmentReport` + available releases to a chosen asset (`core/backend_selection.rs`), per `PLAN.md` §2.2. The result type is this task's design (`CONTRACTS.md` declares none): a decision value carrying the chosen `AvailableRelease` plus an optional warning, or `Err`. The gate-trap resolution (binary-only crate, no caller yet — T-022 consumes this) is decided in the PR, recorded in its description. Spec reading worth noting: "Blackwell with a CUDA major above 13 available" is listed as a profile without a stated outcome — implemented as selecting the highest available CUDA major ≥ 13 (forward-compatible), per the task's own rule statement; if the owner reads it otherwise, that is a Discrepancy.
 
 ---
 
