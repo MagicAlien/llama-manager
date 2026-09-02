@@ -54,6 +54,11 @@ windows = { version = "0.58", features = [
     "Win32_System_Registry",
 ]}
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+# T-022 (docs/TASKS.md, core/installer.rs): archive extraction, SHA-256 and
+# test scratch directories. All three are on PLAN.md §3's approved list —
+# not re-justified here.
+zip = { version = "2", default-features = false }
+sha2 = "0.10"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -64,3 +69,6 @@ tokio = { version = "1.53.1", features = ["rt", "macros"] }
 # hardware profiles. Approved, PLAN.md §3 (both the "Rust tests" row and the
 # "Approved Rust crates" list name it) — not re-justified here.
 proptest = "1"
+# T-022: scratch directories for installer tests (per PLAN.md §3's dev-dep
+# note).
+tempfile = "3"
