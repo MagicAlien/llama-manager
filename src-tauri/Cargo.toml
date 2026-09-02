@@ -60,3 +60,7 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt", "macros"] }
+# T-021 (docs/TASKS.md, core/backend_selection.rs): the property test over
+# hardware profiles. Approved, PLAN.md §3 (both the "Rust tests" row and the
+# "Approved Rust crates" list name it) — not re-justified here.
+proptest = "1"

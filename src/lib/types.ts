@@ -37,6 +37,18 @@ sha256: string | null, size_bytes: bigint, published_at: string, release_notes_u
  */
 export type Backend = { "kind": "Cuda", major: number, } | { "kind": "Vulkan" } | { "kind": "Cpu" };
 
+// ---- BackendSelection ----
+/**
+ * The result of [`select_backend`]: the chosen release plus an optional
+ * warning. The warning is `Some` for Vulkan and CPU selections (performance
+ * will be poor) and `None` for CUDA selections.
+ *
+ * `#[ts(export)]` so the frontend (T-024, the version-management UI) can
+ * display the selection and its warning; `AvailableRelease` is already
+ * exported, and this is a thin wrapper around it.
+ */
+export type BackendSelection = { release: AvailableRelease, warning: string | null, };
+
 // ---- CheckStatus ----
 export type CheckStatus = "Pass" | "Warn" | "Fail";
 
