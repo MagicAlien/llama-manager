@@ -21,4 +21,5 @@
 pub mod backend_selection;
 pub mod env_probe;
 pub mod gh_releases;
+pub mod installer;
 pub mod types;

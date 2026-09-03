@@ -925,7 +925,11 @@ mod tests {
         RuntimeRow {
             build_tag: build_tag.into(),
             backend,
-            install_path: "C:/ProgramData/LlamaManager/runtimes/b9196".into(),
+            // Representative of the T-022 install layout: the app data root is
+            // `%LOCALAPPDATA%\LlamaManager` (not `C:\ProgramData`, which needs
+            // elevation), and each build gets a per-backend directory
+            // `<build_tag>-<dir>` (T-022 decision, see core/installer.rs).
+            install_path: "C:/Users/test/AppData/Local/LlamaManager/runtimes/b9196-cuda_13".into(),
             is_active,
             installed_at: ts(2026, 8, 1),
             verified_flags_json: "[]".into(),
