@@ -81,7 +81,8 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             ipc::probe_environment,
-            ipc::check_for_updates
+            ipc::check_for_updates,
+            ipc::install_runtime
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

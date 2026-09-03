@@ -24,7 +24,9 @@
 
 use crate::core::env_probe;
 use crate::core::gh_releases;
-use crate::core::types::{AppError, AvailableRelease, EnvironmentReport};
+use crate::core::installer;
+use crate::core::types::{AppError, AvailableRelease, Backend, EnvironmentReport, InstallProgress};
+use tauri::Emitter;
 
 /// `docs/CONTRACTS.md` §4: `probe_environment | — | EnvironmentReport | T-010`.
 ///
@@ -43,6 +45,101 @@ pub fn probe_environment() -> Result<EnvironmentReport, AppError> {
     // to 8080. `ServerConfig` is not wired to real persisted settings until
     // T-050, so there is no `ServerConfig::default()` to read here yet.
     Ok(env_probe::probe(&provider, env_probe::DEFAULT_LISTEN_PORT))
+}
+
+/// `docs/CONTRACTS.md` §4: `install_runtime | tag, backend | () + install-progress events | T-022`.
+///
+/// Thin by design (invariant 1): deserialize `(tag, backend)`, resolve the
+/// matching release through T-020's client, open the app database and the
+/// install root, and bridge core's progress callback to the `install-progress`
+/// event. All pipeline logic lives in `core::installer`.
+///
+/// The `Resolving` event is emitted here — not by core — because resolution
+/// (fetching the releases list) happens in this handler; core emits from
+/// `Downloading` onward, and a no-op re-install emits only `Done`. On any
+/// failure the command emits `Failed { error }` *and* returns the error: the
+/// event keeps the UI's progress state consistent while the returned error is
+/// what an `invoke` caller can catch.
+///
+/// `AppHandle` is injected by Tauri (it is not a frontend argument): it is how
+/// this handler reaches the event emitter without any global state
+/// (invariant 2). The database file lives at `<data root>\llama-manager.db`
+/// (`core::installer::database_path`); its parent directory is created here,
+/// since `rusqlite` opens files but never creates directories.
+#[tauri::command]
+pub async fn install_runtime(
+    tag: String,
+    backend: Backend,
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    let emit = |event: InstallProgress| {
+        let _ = app.emit("install-progress", event);
+    };
+
+    emit(InstallProgress::Resolving);
+
+    let client = gh_releases::default_client().map_err(|err| AppError::Network {
+        message: format!("could not build the HTTP client: {err}"),
+    })?;
+    let releases = gh_releases::check_for_updates(&client, gh_releases::GITHUB_API_BASE).await?;
+
+    let release = releases
+        .into_iter()
+        .find(|r| r.build_tag == tag && r.backend == backend)
+        .ok_or_else(|| AppError::NotFound {
+            what: format!("release {tag} for backend {backend}"),
+        })?;
+
+    let Some(data_root) = installer::data_root() else {
+        return Err(AppError::Internal {
+            message: "LOCALAPPDATA is not set; the app data directory cannot be determined".into(),
+        });
+    };
+    let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    std::fs::create_dir_all(&data_root).map_err(|err| AppError::Io {
+        message: format!("could not create {}: {err}", data_root.display()),
+    })?;
+    let conn = crate::db::open(&db_path)?;
+
+    let Some(root) = installer::install_root() else {
+        return Err(AppError::Internal {
+            message: "LOCALAPPDATA is not set; the install root cannot be determined".into(),
+        });
+    };
+
+    // Stage 1 (sync, DB): no-op check + stale-state cleanup.
+    match installer::pre_install_on(&conn, &tag, &backend, &root)? {
+        installer::PreCheckResult::Existing(build) => {
+            emit(InstallProgress::Done { build });
+            return Ok(());
+        }
+        installer::PreCheckResult::Proceed => {}
+    }
+
+    let mut progress = |event: InstallProgress| emit(event);
+
+    // Stage 2 (async, no DB): download -> verify -> extract -> move.
+    match installer::download_verify_extract(&client, &release, &root, &mut progress).await {
+        Ok(extracted) => {
+            // Stage 3 (sync, DB): register + delete the partial file.
+            emit(InstallProgress::Registering);
+            let build = installer::register_runtime_on(
+                &conn,
+                &tag,
+                &backend,
+                &extracted.target,
+                &extracted.partial,
+            )?;
+            emit(InstallProgress::Done { build });
+            Ok(())
+        }
+        Err(err) => {
+            emit(InstallProgress::Failed { error: err.clone() });
+            Err(err)
+        }
+    }
 }
 
 /// `docs/CONTRACTS.md` §4: `check_for_updates | — | Vec<AvailableRelease> | T-020`.
