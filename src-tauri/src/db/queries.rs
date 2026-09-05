@@ -467,6 +467,23 @@ pub fn delete_runtime(
     Ok(())
 }
 
+/// T-024 — deactivate all runtimes. Used before activating a new one, since
+/// the unique index `idx_runtimes_single_active` rejects two simultaneously
+/// active rows.
+pub fn deactivate_all_runtimes(conn: &rusqlite::Connection) -> Result<(), AppError> {
+    conn.execute("UPDATE runtimes SET is_active = 0", [])
+        .map_err(db_err)?;
+    Ok(())
+}
+
+/// T-024 — count the total number of installed runtimes.
+pub fn count_runtimes(conn: &rusqlite::Connection) -> Result<u32, AppError> {
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM runtimes", [], |row| row.get(0))
+        .map_err(db_err)?;
+    Ok(count as u32)
+}
+
 /// T-023 fills the two verification columns after it has parsed a build's
 /// `llama-server.exe --help` output. `verified_flags_json` holds the verified
 /// flag list *and* the health endpoint as one JSON object (the column's

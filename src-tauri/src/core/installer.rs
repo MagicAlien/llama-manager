@@ -619,7 +619,7 @@ pub fn verify_runtime_on(
 /// `registration_channel` string maps onto the enum by variant name; any
 /// unrecognized value degrades to `Undetermined` with a warning rather than
 /// guessing.
-fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
+pub fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
     // `verified_flags_json` is `{"flags":[...],"health_endpoint":"/props"}`
     // once T-023 has verified the build. A row at the schema default (`"[]"`)
     // or a legacy bare array decodes to an empty list and no endpoint; a
@@ -685,6 +685,43 @@ fn channel_name(channel: &RegistrationChannel) -> String {
         RegistrationChannel::ScanOnly => "ScanOnly".to_string(),
         RegistrationChannel::Undetermined => "Undetermined".to_string(),
     }
+}
+
+/// T-024 — set a build as the active runtime. Deactivates all other builds
+/// first (the database's unique index rejects two simultaneously-active
+/// rows), then activates the target. Returns the activated build.
+pub fn activate_runtime_on(
+    conn: &Connection,
+    build_tag: &str,
+    backend: &Backend,
+) -> Result<RuntimeBuild, AppError> {
+    // Deactivate all other runtimes.
+    crate::db::queries::deactivate_all_runtimes(conn)?;
+    // Activate the target.
+    crate::db::queries::set_runtime_active(conn, build_tag, backend, true)?;
+    // Return the activated build.
+    let row = get_runtime(conn, build_tag, backend)?.ok_or_else(|| AppError::NotFound {
+        what: format!("runtime {build_tag}/{backend}"),
+    })?;
+    Ok(row_to_build(&row))
+}
+
+/// T-024 — remove a runtime build from the database and delete its files.
+/// Returns the number of runtimes remaining after removal.
+pub fn remove_runtime_on(
+    conn: &Connection,
+    build_tag: &str,
+    backend: &Backend,
+    root: &Path,
+) -> Result<u32, AppError> {
+    let target = target_dir(root, build_tag, backend);
+    crate::db::queries::delete_runtime(conn, build_tag, backend)?;
+    if target.exists() {
+        std::fs::remove_dir_all(&target).map_err(io_err)?;
+    }
+    // Count remaining runtimes.
+    let remaining = crate::db::queries::count_runtimes(conn)?;
+    Ok(remaining)
 }
 
 /// Load a registered build from the database as a [`RuntimeBuild`], or
