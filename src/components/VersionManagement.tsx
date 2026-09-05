@@ -6,7 +6,6 @@ import { Separator } from "@/components/ui/separator";
 import {
   activateRuntime,
   checkForUpdates,
-  getActiveRuntime,
   getServerState,
   installRuntime,
   listRuntimes,
@@ -139,7 +138,7 @@ function BuildCard({
 
       {isUndetermined && (
         <p className="rounded-md bg-amber-100 p-2 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-          {versionsCopy.undeterminedWarning} {versionsCopy.undeterminedFlag}
+          ⚠ {versionsCopy.undeterminedFlag}
         </p>
       )}
 
@@ -205,14 +204,12 @@ export function VersionManagementView() {
   const fetchAll = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [runtimes, active, state, releases] = await Promise.all([
+      const [runtimes, state, releases] = await Promise.all([
         listRuntimes(),
-        getActiveRuntime(),
         getServerState(),
         checkForUpdates().catch(() => [] as AvailableRelease[]),
       ]);
       setBuilds(runtimes);
-      setActiveBuild(active);
       setServerState(state);
       setLatestReleases(releases);
     } catch {

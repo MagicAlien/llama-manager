@@ -52,7 +52,7 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemInformation",
     "Win32_Storage_FileSystem",
     "Win32_System_Registry",
-]}
+] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 # T-022 (docs/TASKS.md, core/installer.rs): archive extraction, SHA-256 and
 # test scratch directories. All three are on PLAN.md §3's approved list —

@@ -56,6 +56,14 @@ pub fn list_runtimes() -> Result<Vec<crate::core::types::RuntimeBuild>, AppError
     let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
         message: "could not determine the database path".into(),
     })?;
+    let db_dir = db_path.parent().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database directory".into(),
+    })?;
+    if !db_dir.exists() {
+        std::fs::create_dir_all(db_dir).map_err(|e| AppError::Internal {
+            message: format!("could not create database directory: {e}"),
+        })?;
+    }
     let conn = crate::db::open(&db_path)?;
     let rows = crate::db::queries::list_runtimes(&conn)?;
     Ok(rows
