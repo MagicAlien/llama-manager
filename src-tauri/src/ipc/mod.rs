@@ -125,6 +125,16 @@ pub fn get_active_runtime() -> Result<Option<crate::core::types::RuntimeBuild>, 
         .map(|row| installer::row_to_build(&row)))
 }
 
+/// `docs/CONTRACTS.md` §4: `get_server_state | — | ServerState | T-040`.
+///
+/// Returns the current server state. Until T-040 is implemented, this
+/// always returns "Stopped" — the server process supervisor does not
+/// exist yet, so the server can never be running.
+#[tauri::command]
+pub fn get_server_state() -> Result<crate::core::types::ServerState, AppError> {
+    Ok(crate::core::types::ServerState::Stopped)
+}
+
 /// `docs/CONTRACTS.md` §4: `install_runtime | tag, backend | () + install-progress events | T-022`.
 ///
 /// Thin by design (invariant 1): deserialize `(tag, backend)`, resolve the

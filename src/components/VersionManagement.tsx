@@ -138,7 +138,7 @@ function BuildCard({
 
       {isUndetermined && (
         <p className="rounded-md bg-amber-100 p-2 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-          ⚠ {versionsCopy.undeterminedFlag}
+          {versionsCopy.undeterminedFlag}
         </p>
       )}
 
