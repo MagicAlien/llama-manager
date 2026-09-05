@@ -467,6 +467,43 @@ pub fn delete_runtime(
     Ok(())
 }
 
+/// T-023 fills the two verification columns after it has parsed a build's
+/// `llama-server.exe --help` output. `verified_flags_json` holds the verified
+/// flag list *and* the health endpoint as one JSON object (the column's
+/// default stays the honest unverified value, `"[]"`); `registration_channel`
+/// is the enum's variant name string. A build that has never been verified
+/// simply keeps its defaults — this function is only called with real values.
+///
+/// Like `set_runtime_active`, the row is addressed by (build_tag, backend) and
+/// a missing row is a `NotFound`, not a silent no-op: verification of a build
+/// that is not registered is a caller bug.
+pub fn update_runtime_verification(
+    conn: &rusqlite::Connection,
+    build_tag: &str,
+    backend: &Backend,
+    verified_flags_json: &str,
+    registration_channel: &str,
+) -> Result<(), AppError> {
+    let changed = conn
+        .execute(
+            "UPDATE runtimes SET verified_flags_json = ?1, registration_channel = ?2 \
+             WHERE build_tag = ?3 AND backend = ?4",
+            params![
+                verified_flags_json,
+                registration_channel,
+                build_tag,
+                backend.to_string()
+            ],
+        )
+        .map_err(db_err)?;
+    if changed == 0 {
+        return Err(AppError::NotFound {
+            what: format!("runtime {build_tag}/{backend}"),
+        });
+    }
+    Ok(())
+}
+
 // ─── settings ───────────────────────────────────────────────────
 
 /// `key -> value` upsert. Covers both "create" (key did not exist) and

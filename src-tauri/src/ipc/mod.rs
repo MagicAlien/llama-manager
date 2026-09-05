@@ -132,6 +132,11 @@ pub async fn install_runtime(
                 &extracted.target,
                 &extracted.partial,
             )?;
+            // Stage 4 (sync, DB): run `llama-server.exe --help` and persist the
+            // verified flags + health endpoint (T-023). A failure here leaves
+            // the build registered but unverified — it does not roll back the
+            // install (see `installer::verify_runtime_on`).
+            let build = installer::verify_runtime_on(&conn, &build)?;
             emit(InstallProgress::Done { build });
             Ok(())
         }
