@@ -43,6 +43,21 @@ export function listRuntimes(): Promise<RuntimeBuild[]> {
   return invoke<RuntimeBuild[]>("list_runtimes");
 }
 
+// T-024
+export function activateRuntime(tag: string, backend: Backend): Promise<RuntimeBuild> {
+  return invoke<RuntimeBuild>("activate_runtime", { tag, backend });
+}
+
+// T-024
+export function removeRuntime(tag: string, backend: Backend): Promise<void> {
+  return invoke<void>("remove_runtime", { tag, backend });
+}
+
+// T-024
+export function getActiveRuntime(): Promise<RuntimeBuild | null> {
+  return invoke<RuntimeBuild | null>("get_active_runtime");
+}
+
 // T-020
 export function checkForUpdates(): Promise<AvailableRelease[]> {
   return invoke<AvailableRelease[]>("check_for_updates");
@@ -54,17 +69,6 @@ export function installRuntime(tag: string, backend: Backend): Promise<void> {
   return invoke<void>("install_runtime", { tag, backend });
 }
 
-// T-024
-export function activateRuntime(tag: string, backend: Backend): Promise<RuntimeBuild> {
-  return invoke<RuntimeBuild>("activate_runtime", { tag, backend });
-}
-
-// T-024
-export function removeRuntime(tag: string, backend: Backend): Promise<void> {
-  return invoke<void>("remove_runtime", { tag, backend });
-}
-
-// T-031 — scans and registers; files stay put.
 export function addWatchedFolder(path: string): Promise<ModelEntry[]> {
   return invoke<ModelEntry[]>("add_watched_folder", { path });
 }

@@ -3,24 +3,24 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/ui/loading";
 import { Separator } from "@/components/ui/separator";
-import { probeEnvironment } from "@/lib/ipc";
+import { VersionManagementView } from "@/components/VersionManagement";
+import { listRuntimes, probeEnvironment } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import { strings } from "@/lib/strings";
 import type { CheckStatus, EnvironmentReport, HealthCheck } from "@/lib/types";
 
-// Health-check screen (docs/TASKS.md T-011). This is the first-run view
-// of the Runtime route, not an eighth route — `src/lib/routes.ts` still
-// defines seven (T-005) and nothing here adds to that list. Replaces the
-// scaffolded placeholder T-005 left behind (`RuntimeScreen` used to
-// render nothing but `strings.emptyScreenNote`).
+// Runtime route (docs/TASKS.md T-011, T-024).
 //
-// Scope discipline (docs/WORKFLOW.md §3): traffic lights, remediation
-// text and a manual refresh button only. No starting/stopping the
-// server (that is `ServerState`/the orchestrator, a later task) and no
-// polling interval — "manual refresh" means a button, not a timer.
+// Two views:
+// - Health-check screen: first-run view when no builds are installed.
+// - Version management screen: main view after at least one build is installed.
+//
+// Both live in this file because they share the route; the health-check
+// is not an eighth route (docs/TASKS.md T-011).
 
 const copy = strings.screens.runtime;
 const healthCopy = copy.healthCheck;
+const versionsCopy = copy.versions;
 
 const STATUS_DOT_CLASS: Record<CheckStatus, string> = {
   Pass: "bg-pass",
@@ -62,16 +62,11 @@ function CheckRow({ check }: { check: HealthCheck }) {
   );
 }
 
-export function RuntimeScreen() {
+function HealthCheckView() {
   const [report, setReport] = useState<EnvironmentReport | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
-  // Fetches and updates state only from the promise's own callbacks —
-  // no setState call is synchronous within the function body itself, so
-  // it is safe to invoke directly from the mount effect below
-  // (react-hooks/set-state-in-effect). The synchronous "start loading"
-  // setState calls a refresh needs live in `handleRefresh`, not here.
   const fetchEnvironment = useCallback(() => {
     probeEnvironment()
       .then((result) => {
@@ -86,9 +81,6 @@ export function RuntimeScreen() {
       });
   }, []);
 
-  // Manual refresh only (docs/WORKFLOW.md §3) — fetched once on mount to
-  // populate the first-run view, and again only when this handler runs
-  // from the button below. No `setInterval`, no polling.
   useEffect(() => {
     fetchEnvironment();
   }, [fetchEnvironment]);
@@ -128,4 +120,29 @@ export function RuntimeScreen() {
       ) : null}
     </section>
   );
+}
+
+export function RuntimeScreen() {
+  const [hasBuilds, setHasBuilds] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    listRuntimes()
+      .then((builds) => setHasBuilds(builds.length > 0))
+      .catch(() => setHasBuilds(false));
+  }, []);
+
+  if (hasBuilds === null) {
+    return (
+      <section className="flex flex-col gap-4">
+        <h1 className="text-xl font-semibold text-foreground">{copy.title}</h1>
+        <Loading label={versionsCopy.loadingLabel ?? "Loading runtime info…"} />
+      </section>
+    );
+  }
+
+  if (hasBuilds) {
+    return <VersionManagementView />;
+  }
+
+  return <HealthCheckView />;
 }

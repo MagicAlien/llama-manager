@@ -90,7 +90,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ipc::probe_environment,
             ipc::check_for_updates,
-            ipc::install_runtime
+            ipc::install_runtime,
+            ipc::list_runtimes,
+            ipc::activate_runtime,
+            ipc::remove_runtime,
+            ipc::get_active_runtime
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

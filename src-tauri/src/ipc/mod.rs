@@ -47,6 +47,76 @@ pub fn probe_environment() -> Result<EnvironmentReport, AppError> {
     Ok(env_probe::probe(&provider, env_probe::DEFAULT_LISTEN_PORT))
 }
 
+/// `docs/CONTRACTS.md` §4: `list_runtimes | — | Vec<RuntimeBuild> | T-024`.
+///
+/// Returns all installed runtime builds, including their verification
+/// status. The UI uses this to render the version management screen.
+#[tauri::command]
+pub fn list_runtimes() -> Result<Vec<crate::core::types::RuntimeBuild>, AppError> {
+    let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    let conn = crate::db::open(&db_path)?;
+    let rows = crate::db::queries::list_runtimes(&conn)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| installer::row_to_build(&row))
+        .collect())
+}
+
+/// `docs/CONTRACTS.md` §4: `activate_runtime | tag, backend | RuntimeBuild | T-024`.
+///
+/// Sets the specified build as the active runtime. The active build is used
+/// on the next server start. Multiple active builds are rejected by the
+/// database's unique index, so this command first deactivates all others.
+#[tauri::command]
+pub fn activate_runtime(
+    tag: String,
+    backend: Backend,
+) -> Result<crate::core::types::RuntimeBuild, AppError> {
+    let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    let conn = crate::db::open(&db_path)?;
+    installer::activate_runtime_on(&conn, &tag, &backend)
+}
+
+/// `docs/CONTRACTS.md` §4: `remove_runtime | tag, backend | () | T-024`.
+///
+/// Removes a runtime build from the database and deletes its files.
+/// Cannot remove the last remaining build or an active build while the
+/// server is running (checked by the caller).
+#[tauri::command]
+pub fn remove_runtime(tag: String, backend: Backend) -> Result<(), AppError> {
+    let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    let Some(root) = installer::install_root() else {
+        return Err(AppError::Internal {
+            message: "LOCALAPPDATA is not set; the install root cannot be determined".into(),
+        });
+    };
+    let conn = crate::db::open(&db_path)?;
+    installer::remove_runtime_on(&conn, &tag, &backend, &root)?;
+    Ok(())
+}
+
+/// `docs/CONTRACTS.md` §4: `get_active_runtime | — | RuntimeBuild | T-024`.
+///
+/// Returns the currently active runtime build, if any.
+#[tauri::command]
+pub fn get_active_runtime() -> Result<Option<crate::core::types::RuntimeBuild>, AppError> {
+    let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    let conn = crate::db::open(&db_path)?;
+    let rows = crate::db::queries::list_runtimes(&conn)?;
+    Ok(rows
+        .into_iter()
+        .find(|row| row.is_active)
+        .map(|row| installer::row_to_build(&row)))
+}
+
 /// `docs/CONTRACTS.md` §4: `install_runtime | tag, backend | () + install-progress events | T-022`.
 ///
 /// Thin by design (invariant 1): deserialize `(tag, backend)`, resolve the
@@ -147,19 +217,7 @@ pub async fn install_runtime(
     }
 }
 
-/// `docs/CONTRACTS.md` §4: `check_for_updates | — | Vec<AvailableRelease> | T-020`.
-///
-/// No arguments to deserialize. The real work — fetching the releases list,
-/// parsing asset names into `(build_tag, Backend)`, and picking the newest
-/// per backend — lives in `core::gh_releases`. `AGENTS.md` invariant 1: this
-/// handler only constructs a client, calls `core/`, and serializes the
-/// result.
-///
-/// The client is built fresh per call: a `reqwest::Client` owns its
-/// connection pool and TLS state, and a global one would be a piece of
-/// shared state with no `ServerState` to own it (invariant 2). The call is
-/// `async`, so Tauri runs it on its own executor — no `tokio::runtime`
-/// bootstrap is needed in the handler.
+/// `docs/CONTRACTS.md` §4: `list_runtimes | — | Vec<RuntimeBuild> | T-024`.
 #[tauri::command]
 pub async fn check_for_updates() -> Result<Vec<AvailableRelease>, AppError> {
     let client = gh_releases::default_client().map_err(|err| AppError::Network {
