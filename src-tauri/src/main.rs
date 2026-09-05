@@ -72,6 +72,14 @@ fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
 }
 
 fn main() {
+    // Headless subcommands (T-023): run before the GUI so the same binary can
+    // install/verify a build and render `docs/verified-flags.md` without a
+    // window. `AGENTS.md` invariant 1 keeps the logic in `core/`; this only
+    // parses arguments and calls `core::installer`, then exits.
+    if let Some(code) = run_headless() {
+        std::process::exit(code);
+    }
+
     // Held for the process lifetime: dropping it early would stop the
     // non-blocking writer from flushing to app.log.
     let _tracing_guard = init_tracing();
@@ -86,4 +94,93 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Dispatch the headless (no-GUI) subcommands. Returns `Some(code)` when a
+/// subcommand was handled (and `main` must exit with it), or `None` to launch
+/// the normal GUI.
+///
+/// - `install-verify <zip> <tag> <backend>` — extract a local archive, register
+///   the build, and run `llama-server.exe --help` to persist its verified
+///   flags (T-023). Keeps the pinned build registered for T-025/T-043.
+/// - `export-verified-flags <tag> <backend> <out>` — render
+///   `docs/verified-flags.md` for a build from the database (T-023).
+fn run_headless() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    let sub = args.get(1).map(String::as_str);
+
+    match sub {
+        Some("install-verify") => {
+            let (zip, tag, backend) = match (args.get(2), args.get(3), args.get(4)) {
+                (Some(zip), Some(tag), Some(backend)) => {
+                    (zip.as_str(), tag.as_str(), backend.as_str())
+                }
+                _ => {
+                    eprintln!("usage: llama-manager install-verify <zip> <tag> <backend>");
+                    return Some(2);
+                }
+            };
+            let backend = match backend.parse::<crate::core::types::Backend>() {
+                Ok(backend) => backend,
+                Err(_) => {
+                    eprintln!("unknown backend {backend:?} (expected vulkan, cpu, or cuda:N)");
+                    return Some(2);
+                }
+            };
+            match crate::core::installer::install_verify_local(
+                std::path::Path::new(zip),
+                tag,
+                &backend,
+            ) {
+                Ok(build) => {
+                    println!(
+                        "verified {}/{}: {} flags, health endpoint {:?}, channel {:?}",
+                        build.build_tag,
+                        build.backend,
+                        build.verified_flags.len(),
+                        build.health_endpoint,
+                        build.registration_channel
+                    );
+                    Some(0)
+                }
+                Err(err) => {
+                    eprintln!("install-verify failed: {err}");
+                    Some(1)
+                }
+            }
+        }
+        Some("export-verified-flags") => {
+            let (tag, backend, out) = match (args.get(2), args.get(3), args.get(4)) {
+                (Some(tag), Some(backend), Some(out)) => {
+                    (tag.as_str(), backend.as_str(), out.as_str())
+                }
+                _ => {
+                    eprintln!("usage: llama-manager export-verified-flags <tag> <backend> <out>");
+                    return Some(2);
+                }
+            };
+            let backend = match backend.parse::<crate::core::types::Backend>() {
+                Ok(backend) => backend,
+                Err(_) => {
+                    eprintln!("unknown backend {backend:?} (expected vulkan, cpu, or cuda:N)");
+                    return Some(2);
+                }
+            };
+            match crate::core::installer::export_verified_flags_md(
+                tag,
+                &backend,
+                std::path::Path::new(out),
+            ) {
+                Ok(()) => {
+                    println!("wrote {out}");
+                    Some(0)
+                }
+                Err(err) => {
+                    eprintln!("export-verified-flags failed: {err}");
+                    Some(1)
+                }
+            }
+        }
+        _ => None,
+    }
 }

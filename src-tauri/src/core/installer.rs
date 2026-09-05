@@ -90,6 +90,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
 use chrono::Utc;
@@ -98,11 +99,15 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 use zip::ZipArchive;
 
+use crate::core::flag_verify;
+
 use crate::core::types::{
     AppError, AvailableRelease, Backend, InstallProgress, RegistrationChannel, RuntimeBuild,
     VerifiedFlag,
 };
-use crate::db::queries::{delete_runtime, get_runtime, insert_runtime, RuntimeRow};
+use crate::db::queries::{
+    delete_runtime, get_runtime, insert_runtime, update_runtime_verification, RuntimeRow,
+};
 
 /// The app's data root: `%LOCALAPPDATA%\LlamaManager`. T-001 already creates
 /// `<root>\logs` here; runtimes and the database live alongside it.
@@ -389,6 +394,78 @@ pub async fn download_verify_extract(
     })
 }
 
+/// Extract a local zip (already on disk) into the install target, with the
+/// same zip-slip validation as the download path. Used by the headless
+/// `install-verify` subcommand (T-023) to install a build from a local
+/// archive rather than a download. Returns the install target directory.
+///
+/// This deliberately mirrors the download path's extraction (two passes:
+/// validate every entry, then write) so a rejected archive leaves nothing on
+/// disk. The download path is left untouched — it has its own rollback
+/// handling for the temp file this local path has no equivalent of.
+pub fn extract_local_zip(
+    zip_path: &Path,
+    root: &Path,
+    tag: &str,
+    backend: &Backend,
+    progress: &mut impl FnMut(InstallProgress),
+) -> Result<PathBuf, AppError> {
+    std::fs::create_dir_all(root).map_err(io_err)?;
+
+    let zip_file = std::fs::File::open(zip_path).map_err(io_err)?;
+    let mut archive = ZipArchive::new(zip_file).map_err(zip_err)?;
+
+    let total_entries = archive.len() as u32;
+
+    // Pass 1: validate *every* entry before writing anything, so a rejected
+    // archive leaves nothing on disk — not even the entries that happened to
+    // precede the offender.
+    let mut names: Vec<String> = Vec::with_capacity(archive.len());
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(zip_err)?;
+        if entry.is_symlink() {
+            return Err(AppError::UnsafeArchiveEntry {
+                entry: entry.name().to_string(),
+            });
+        }
+        validate_entry_name(entry.name())?;
+        names.push(entry.name().to_string());
+    }
+
+    let extract = extract_dir(root, tag, backend);
+    progress(InstallProgress::Extracting {
+        entries_done: 0,
+        entries_total: total_entries,
+    });
+    for (i, name) in names.iter().enumerate() {
+        let mut entry = archive.by_index(i).map_err(zip_err)?;
+        if entry.is_dir() {
+            std::fs::create_dir_all(extract.join(name)).map_err(io_err)?;
+        } else {
+            let destination = extract.join(name);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent).map_err(io_err)?;
+            }
+            let mut out = std::fs::File::create(&destination).map_err(io_err)?;
+            std::io::copy(&mut entry, &mut out).map_err(io_err)?;
+        }
+        progress(InstallProgress::Extracting {
+            entries_done: (i + 1) as u32,
+            entries_total: total_entries,
+        });
+    }
+
+    let target = target_dir(root, tag, backend);
+    std::fs::rename(&extract, &target).map_err(|err| AppError::Io {
+        message: format!(
+            "could not move the extracted runtime into place at {}: {err}",
+            target.display()
+        ),
+    })?;
+
+    Ok(target)
+}
+
 /// Insert the `runtimes` row for a build whose files are already at `target`,
 /// then delete the partial file. If the insert fails, both the moved directory
 /// and the partial file are removed (R5 in the module doc) — a failed
@@ -425,6 +502,7 @@ pub fn register_runtime_on(
                 is_active: false,
                 installed_at,
                 verified_flags: Vec::new(),
+                health_endpoint: None,
                 registration_channel: RegistrationChannel::Undetermined,
             })
         }
@@ -436,6 +514,105 @@ pub fn register_runtime_on(
     }
 }
 
+/// T-023 — verify an installed build. Runs `llama-server.exe --help`, parses
+/// the flags and value types, records the health endpoint and the
+/// registration channel, and persists all of it in the `runtimes` row via
+/// [`update_runtime_verification`].
+///
+/// Synchronous on purpose: it spawns a short-lived subprocess and touches the
+/// database, and the caller may be an async handler (running `--help` is fast,
+/// and a blocking call here is consistent with the synchronous
+/// [`register_runtime_on`] stage that precedes it).
+///
+/// **Degradation, never a false positive.** If the subprocess cannot be
+/// spawned (the binary is missing or refuses to run), the build is left
+/// registered but unverified and a warning is logged — the install itself is
+/// not rolled back. If the help text is not recognized as a llama.cpp layout,
+/// the parser returns an empty verified list (see `flag_verify::parse_help`)
+/// and that empty list is what is stored. Either way the row is updated, so a
+/// verified build is distinguishable from one that could not be verified.
+pub fn verify_runtime_on(
+    conn: &Connection,
+    build: &RuntimeBuild,
+) -> Result<RuntimeBuild, AppError> {
+    let exe = build.install_path.join("llama-server.exe");
+    let output = match Command::new(&exe).arg("--help").output() {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                "could not run {} --help to verify build {}: {err}; leaving it unverified",
+                exe.display(),
+                build.build_tag
+            );
+            return Ok(build.clone());
+        }
+    };
+
+    // `--help` prints to stdout on every build we have captured; stderr is
+    // harmless DLL-load noise. Stdout is the authority.
+    let help = String::from_utf8_lossy(&output.stdout).into_owned();
+
+    let parsed = flag_verify::parse_help(&help);
+    if !parsed.recognized {
+        warn!(
+            "build {} help was not recognized as a llama.cpp --help layout; \
+             storing it as unverified",
+            build.build_tag
+        );
+    }
+
+    // Check every flag named in docs/LLAMACPP.md against the verified list and
+    // name any that are missing or retyped (AGENTS.md §1). This is the
+    // production surface for the doc check: a discrepancy is a warning that
+    // names the specific flag, not a silent pass.
+    let report = flag_verify::check_doc_flags(flag_verify::DOC_FLAGS, &parsed.flags);
+    for missing in &report.missing {
+        warn!(
+            "build {} is missing documented flag {}",
+            build.build_tag, missing
+        );
+    }
+    for retyped in &report.retyped {
+        warn!(
+            "build {} retypes a documented flag: {}",
+            build.build_tag, retyped
+        );
+    }
+    if !report.clean() {
+        warn!(
+            "build {}: {} documented flag(s) missing, {} retyped",
+            build.build_tag,
+            report.missing.len(),
+            report.retyped.len()
+        );
+    }
+
+    let health_endpoint = flag_verify::health_endpoint_from_help(&help);
+    let channel = flag_verify::registration_channel_from_help(&help);
+
+    // Store the verified flag list and the health endpoint as one object
+    // (the column's default stays the honest unverified value, `[]`).
+    let payload = serde_json::json!({
+        "flags": parsed.flags,
+        "health_endpoint": health_endpoint,
+    });
+
+    update_runtime_verification(
+        conn,
+        &build.build_tag,
+        &build.backend,
+        &payload.to_string(),
+        &channel_name(&channel),
+    )?;
+
+    Ok(RuntimeBuild {
+        verified_flags: parsed.flags,
+        health_endpoint: Some(health_endpoint.to_string()),
+        registration_channel: channel,
+        ..build.clone()
+    })
+}
+
 /// A `runtimes` row back into the contract type. `verified_flags_json` is
 /// decoded with a lenient fallback (a corrupt value degrades to "unverified",
 /// never an error — T-023 owns that column's semantics). The stored
@@ -443,8 +620,12 @@ pub fn register_runtime_on(
 /// unrecognized value degrades to `Undetermined` with a warning rather than
 /// guessing.
 fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
-    let verified_flags: Vec<VerifiedFlag> =
-        serde_json::from_str(&row.verified_flags_json).unwrap_or_default();
+    // `verified_flags_json` is `{"flags":[...],"health_endpoint":"/props"}`
+    // once T-023 has verified the build. A row at the schema default (`"[]"`)
+    // or a legacy bare array decodes to an empty list and no endpoint; a
+    // corrupt value degrades the same way. T-040 treats a missing endpoint as
+    // "not yet verified" and must not guess.
+    let (verified_flags, health_endpoint) = decode_verified_payload(&row.verified_flags_json);
     RuntimeBuild {
         build_tag: row.build_tag.clone(),
         backend: row.backend.clone(),
@@ -452,8 +633,34 @@ fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
         is_active: row.is_active,
         installed_at: row.installed_at,
         verified_flags,
+        health_endpoint,
         registration_channel: channel_from_stored(&row.registration_channel),
     }
+}
+
+/// Lenient decode of `runtimes.verified_flags_json` into (flags, endpoint).
+/// Accepts the T-023 object form, a legacy bare array, and the schema default
+/// `[]`. Any unrecognized shape yields an empty list and no endpoint — the
+/// build is simply "unverified", never an error.
+pub fn decode_verified_payload(raw: &str) -> (Vec<VerifiedFlag>, Option<String>) {
+    #[derive(serde::Deserialize)]
+    struct Payload {
+        #[serde(default)]
+        flags: Vec<VerifiedFlag>,
+        #[serde(default)]
+        health_endpoint: Option<String>,
+    }
+
+    if let Ok(payload) = serde_json::from_str::<Payload>(raw) {
+        return (payload.flags, payload.health_endpoint);
+    }
+
+    // Legacy / default: a bare array of verified flags, no endpoint.
+    if let Ok(flags) = serde_json::from_str::<Vec<VerifiedFlag>>(raw) {
+        return (flags, None);
+    }
+
+    (Vec::new(), None)
 }
 
 fn channel_from_stored(raw: &str) -> RegistrationChannel {
@@ -468,6 +675,109 @@ fn channel_from_stored(raw: &str) -> RegistrationChannel {
             RegistrationChannel::Undetermined
         }
     }
+}
+
+/// The variant name of a [`RegistrationChannel`], for storage in
+/// `runtimes.registration_channel`. Inverse of [`channel_from_stored`].
+fn channel_name(channel: &RegistrationChannel) -> String {
+    match channel {
+        RegistrationChannel::PresetDeclaresPath => "PresetDeclaresPath".to_string(),
+        RegistrationChannel::ScanOnly => "ScanOnly".to_string(),
+        RegistrationChannel::Undetermined => "Undetermined".to_string(),
+    }
+}
+
+/// Load a registered build from the database as a [`RuntimeBuild`], or
+/// [`AppError::RuntimeNotFound`] when the `(build_tag, backend)` pair is not
+/// installed. Used by the headless `export-verified-flags` path, which renders
+/// `docs/verified-flags.md` from the database rather than from a live process.
+pub fn get_runtime_build(
+    conn: &Connection,
+    build_tag: &str,
+    backend: &Backend,
+) -> Result<RuntimeBuild, AppError> {
+    let row = get_runtime(conn, build_tag, backend)?.ok_or_else(|| AppError::NotFound {
+        what: format!("runtime {build_tag}/{backend}"),
+    })?;
+    Ok(row_to_build(&row))
+}
+
+/// Headless (no GUI) install of a build from a local zip, then verify it.
+/// Used by the `install-verify` subcommand (T-023) to install the pinned build
+/// for the export workflow and to keep it registered for T-025/T-043.
+///
+/// This is the same production path the GUI uses, minus the download: it
+/// extracts a local archive (zip-slip-safe), registers the `runtimes` row, and
+/// runs `llama-server.exe --help` to persist the verified flags. It opens its
+/// own database connection at [`database_path()`] and returns the verified
+/// build so the caller can report it.
+pub fn install_verify_local(
+    zip_path: &Path,
+    tag: &str,
+    backend: &Backend,
+) -> Result<RuntimeBuild, AppError> {
+    let Some(data_root) = data_root() else {
+        return Err(AppError::Internal {
+            message: "LOCALAPPDATA is not set; the data root cannot be determined".into(),
+        });
+    };
+    let db_path = database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    std::fs::create_dir_all(&data_root).map_err(io_err)?;
+    let conn = crate::db::open(&db_path)?;
+
+    let Some(root) = install_root() else {
+        return Err(AppError::Internal {
+            message: "LOCALAPPDATA is not set; the install root cannot be determined".into(),
+        });
+    };
+
+    let mut progress = |_event: InstallProgress| {};
+    let target = extract_local_zip(zip_path, &root, tag, backend, &mut progress)?;
+
+    // No partial file on the local path; pass a path that does not exist so
+    // the (no-op) cleanup in `register_runtime_on` is harmless.
+    let partial = partial_file(&root, tag, backend);
+    let build = register_runtime_on(&conn, tag, backend, &target, &partial)?;
+
+    verify_runtime_on(&conn, &build)
+}
+
+/// Headless (no GUI) export of `docs/verified-flags.md` for one build,
+/// rendered from the database. Used by the `export-verified-flags` subcommand
+/// (T-023), which `scripts/export-verified-flags.ps1` drives. The output is a
+/// pure function of the stored row, so it is byte-for-byte stable.
+pub fn export_verified_flags_md(
+    build_tag: &str,
+    backend: &Backend,
+    out_path: &Path,
+) -> Result<(), AppError> {
+    let db_path = database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    let conn = crate::db::open(&db_path)?;
+    let build = get_runtime_build(&conn, build_tag, backend)?;
+
+    let Some(health_endpoint) = build.health_endpoint else {
+        return Err(AppError::Internal {
+            message: format!(
+                "build {build_tag}/{backend} has no verified health endpoint; run it through the installer first"
+            ),
+        });
+    };
+    let markdown = flag_verify::render_verified_flags_md(
+        &build.build_tag,
+        &build.verified_flags,
+        &health_endpoint,
+        &build.registration_channel,
+    );
+
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err)?;
+    }
+    std::fs::write(out_path, markdown).map_err(io_err)?;
+    Ok(())
 }
 
 /// Reject an archive entry whose destination would escape the extraction

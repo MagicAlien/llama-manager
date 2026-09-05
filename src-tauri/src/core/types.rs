@@ -264,7 +264,7 @@ pub struct EnvironmentReport {
 
 // ─── Runtime ────────────────────────────────────────────────────
 
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
 #[ts(export)]
 pub struct VerifiedFlag {
     /// "--flash-attn"
@@ -297,6 +297,12 @@ pub struct RuntimeBuild {
     pub is_active: bool,
     pub installed_at: DateTime<Utc>,
     pub verified_flags: Vec<VerifiedFlag>,
+    /// The health endpoint this build offers — `/health` where it exists,
+    /// otherwise `/props` — recorded by T-023 from the `--help` capture and
+    /// stored alongside the verified flag list in `runtimes.verified_flags_json`.
+    /// `None` when the build is registered but not yet verified: T-040's
+    /// `Starting` transition must not guess in that case.
+    pub health_endpoint: Option<String>,
     pub registration_channel: RegistrationChannel,
 }
 
@@ -857,6 +863,7 @@ mod tests {
                 takes_value: true,
                 allowed_values: Some(vec!["on".into(), "off".into(), "auto".into()]),
             }],
+            health_endpoint: Some("/props".into()),
             registration_channel: RegistrationChannel::Undetermined,
         }
     }

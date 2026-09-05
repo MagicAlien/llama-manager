@@ -230,7 +230,15 @@ export type RuntimeBuild = {
 /**
  * "b9196"
  */
-build_tag: string, backend: Backend, install_path: string, is_active: boolean, installed_at: string, verified_flags: Array<VerifiedFlag>, registration_channel: RegistrationChannel, };
+build_tag: string, backend: Backend, install_path: string, is_active: boolean, installed_at: string, verified_flags: Array<VerifiedFlag>, 
+/**
+ * The health endpoint this build offers — `/health` where it exists,
+ * otherwise `/props` — recorded by T-023 from the `--help` capture and
+ * stored alongside the verified flag list in `runtimes.verified_flags_json`.
+ * `None` when the build is registered but not yet verified: T-040's
+ * `Starting` transition must not guess in that case.
+ */
+health_endpoint: string | null, registration_channel: RegistrationChannel, };
 
 // ---- SamplingDefaults ----
 export type SamplingDefaults = { temperature: number | null, top_p: number | null, top_k: number | null, min_p: number | null, repeat_penalty: number | null, presence_penalty: number | null, frequency_penalty: number | null, seed: bigint | null, };
