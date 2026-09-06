@@ -346,20 +346,21 @@ ts-rs's own docs (https://docs.rs/ts-rs/12.0.0/ts_rs/) say `#[ts(export)]` gener
 
 Also confirmed by the same run: `ts-rs` 12 without the `format` cargo feature emits unformatted, single-line-per-type output, matching the docs' own example — but *with* quoted object keys on every field (`{ "kind": "Cuda", major: number, }` — the tag key quoted, the rest not) and a trailing comma after every field, including nested inline objects; the first hand-transcribed version of this file got both wrong (unquoted tag keys, missing some trailing commas) and was replaced with the real captured output. Rust doc comments are carried over as JSDoc `/** ... */` blocks ahead of the field or type they document. `TS_RS_LARGE_INT` was left unset, so `u64`/`i64`/`u128`/`i128` fields map to TypeScript `bigint`, not `number`. `DateTime<Utc>` needs the `chrono-impl` cargo feature. **`serde_json::Value` (`ServerProps.raw`) does *not* work cleanly with the `serde-json-impl` feature**: it emits a bare `raw: JsonValue` reference with no `JsonValue` definition anywhere in the exported set — a dangling type the moment files are concatenated. Fixed with `#[ts(type = "unknown")]` on that one field instead, and the feature is no longer enabled. `PathBuf` and `IpAddr` need no extra feature — both are covered by ts-rs's default foreign-type impls, confirmed by the same run.
 
-### F-000 — Preliminary evidence on the registration channel — **NOT YET CONFIRMED**
+### F-011 — Router registration channel is `PresetDeclaresPath` (T-025, empirical probe)
 
-Gathered from documentation and upstream discussions during the v6.1 review, **not** from an `--help` capture. Recorded so T-023 starts from a hypothesis instead of from nothing. **Do not build on it before T-023 confirms it against a real binary.**
+Confirmed by running the b9196-cpu build in router mode against prepared fixtures.
 
-- **`--models-preset` appears able to declare a model by absolute path.** Upstream documentation describes the router discovering models from more than one source — the `--models-dir` scan *and* the preset INI defining specific models — and a maintainer answer in an upstream discussion advises keeping models outside the scanned directory and referencing them by absolute path in the preset. If confirmed, `registration_channel` is `PresetDeclaresPath` and the entire `ScanOnly` branch, with its link primitives and privilege dependency, never runs.
-  - Sources: `github.com/ggml-org/llama.cpp/discussions/21805`, `deepwiki.com/ggml-org/llama.cpp/6.3-router-mode-and-model-management`
+- **Q1 (absolute paths):** `--models-preset` accepts absolute paths. A preset with `model = E:\LMM\fixtures\model-a.gguf` registered the model as `test-external`. Non-existent paths also register (lazy loading) — the model only fails when actually loaded for inference.
+- **Q2 (reparse points):** `--models-dir` follows both file symlinks and directory junctions. A directory containing `symlink.gguf` (→ real file) and `jdir` (junction → another directory with a model) registered all three: `jdir`, `real`, `symlink`.
+- **Q3 (scan depth):** Scan depth is one level. A model at the scan root (`top.gguf`) and one one level down (`sub1/level1.gguf`) were registered as `top` and `sub1`. A model two levels down (`sub1/sub2/level2.gguf`) was NOT registered.
+- **Q4 (projectors via preset):** The `mmproj` key in a preset INI causes a GGML assertion failure at startup (`GGML_ASSERT(type_to_gguf_type<T>::value == type) failed`). The preset channel does not support projector models — they must be expressed via the scan channel with the `mmproj-` filename prefix convention.
+- **Q5 (health with no model):** All three endpoints (`/health`, `/props`, `/v1/models`) return 200 with no model loaded. `/health` returns `{"status":"ok"}`. `/props` returns router properties including `role: "router"`. `/v1/models` returns an empty data array.
 
-- **Under `--models-dir` the directory must be flat, and subdirectories have a reserved meaning.** A subdirectory is how a *single* multi-file model is expressed — multimodal or multi-shard — not how a library is organised. The scanner treats every subdirectory as a candidate model, there is no exclude flag, and a folder created for tidiness produces phantom entries. Scan depth is limited to one level below the scanned directory; an upstream feature request to increase it is open.
-  - Sources: `github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md`, `github.com/ggml-org/llama.cpp/discussions/21805`, `github.com/ggml-org/llama.cpp/issues/23050`
+The registration channel is `PresetDeclaresPath`. The `ScanOnly` branch with its link primitives is not needed for this build.
 
-- **The mmproj file is identified by a filename prefix.** In a multi-file model directory the projector file's name must begin with `mmproj`. This is a naming convention, not a flag, and it applies regardless of which registration channel is in use.
-  - Source: `github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md`
+### F-012 — F-000 promoted to confirmed (T-025)
 
-- **Adding a model requires a server restart.** Consistent with the no-hot-reload decision already in `docs/CONTRACTS.md` §2; noted because it means the restart banner is not a self-imposed limitation.
+F-000's preliminary hypothesis that `--models-preset` accepts absolute paths is confirmed. The scan depth being one level (not unlimited) was also predicted by F-000. The mmproj filename prefix convention was confirmed. The only discrepancy was that the preset channel does not support the mmproj key (crashes), which F-000 did not predict.
 
 
 <!-- Required entries, by the task that produces them:

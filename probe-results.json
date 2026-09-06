@@ -1,0 +1,94 @@
+{
+  "build": "b9196-cpu",
+  "timestamp": "2026-09-06T10:45:00Z",
+  "results": [
+    {
+      "question": "Q1a",
+      "description": "Does --models-preset register a model by absolute path?",
+      "answer": "yes",
+      "command": "llama-server --models-preset fixtures/preset-absolute.ini --port 8090",
+      "raw_response": "{\"data\":[{\"id\":\"test-a\",\"aliases\":[],\"tags\":[],\"object\":\"model\",\"owned_by\":\"llamacpp\",\"status\":{\"value\":\"unloaded\",\"args\":[\"--model\",\"E:\\\\LMM\\\\fixtures\\\\model-a.gguf\"],\"preset\":\"[test-a]\\nmodel = E:\\\\LMM\\\\fixtures\\\\model-a.gguf\\n\\n\"}}],\"object\":\"list\"}",
+      "detail": "Model registered with absolute path E:\\LMM\\fixtures\\model-a.gguf"
+    },
+    {
+      "question": "Q1b",
+      "description": "Does a non-existent path register?",
+      "answer": "yes",
+      "command": "llama-server --models-preset fixtures/preset-abs-missing.ini --port 8091",
+      "raw_response": "Server logs: 'Available models (1) (*: custom preset) * test-missing'",
+      "detail": "Non-existent path C:\\nonexistent\\model.gguf registered (lazy loading)"
+    },
+    {
+      "question": "Q2a",
+      "description": "Does --models-dir follow file symlinks?",
+      "answer": "yes",
+      "command": "llama-server --models-dir C:/temp/probe-q2a --port 8092",
+      "raw_response": "Server logs: 'Available models (3) ... symlink'",
+      "detail": "File symlink symlink.gguf -> real.gguf registered as 'symlink'"
+    },
+    {
+      "question": "Q2b",
+      "description": "Does --models-dir follow directory junctions?",
+      "answer": "yes",
+      "command": "llama-server --models-dir C:/temp/probe-q2a --port 8092",
+      "raw_response": "Server logs: 'Available models (3) ... jdir'",
+      "detail": "Junction jdir -> C:\\temp\\probe-q2c registered as 'jdir'"
+    },
+    {
+      "question": "Q3a",
+      "description": "Top-level model registered?",
+      "answer": "yes",
+      "command": "llama-server --models-dir C:/temp/probe-q3 --port 8093",
+      "raw_response": "Server logs: 'Available models (2) ... top'",
+      "detail": "top.gguf at scan root registered"
+    },
+    {
+      "question": "Q3b",
+      "description": "One level down registered?",
+      "answer": "yes",
+      "command": "llama-server --models-dir C:/temp/probe-q3 --port 8093",
+      "raw_response": "Server logs: 'Available models (2) ... sub1'",
+      "detail": "sub1/level1.gguf registered as 'sub1'"
+    },
+    {
+      "question": "Q3c",
+      "description": "Two levels down registered?",
+      "answer": "no",
+      "command": "llama-server --models-dir C:/temp/probe-q3 --port 8093",
+      "raw_response": "Server logs: 'Available models (2)' (only top and sub1)",
+      "detail": "sub1/sub2/level2.gguf NOT registered. Scan depth is one level."
+    },
+    {
+      "question": "Q4",
+      "description": "How is a projector expressed on the PresetDeclaresPath channel?",
+      "answer": "discrepancy",
+      "command": "llama-server --models-preset fixtures/preset-mmproj.ini --port 8094",
+      "raw_response": "GGML_ASSERT(type_to_gguf_type<T>::value == type) failed",
+      "detail": "Server crashes with GGML assertion error when mmproj key is used in preset. Preset channel does not support projector models."
+    },
+    {
+      "question": "Q5a",
+      "description": "Is /health reliable with no model loaded?",
+      "answer": "yes",
+      "command": "curl http://127.0.0.1:8090/health",
+      "raw_response": "{\"status\":\"ok\"}",
+      "detail": "Returns 200 with {\"status\":\"ok\"}"
+    },
+    {
+      "question": "Q5b",
+      "description": "Is /props reliable with no model loaded?",
+      "answer": "yes",
+      "command": "curl http://127.0.0.1:8090/props",
+      "raw_response": "{\"role\":\"router\",\"max_instances\":4,\"models_autoload\":true,...}",
+      "detail": "Returns 200 with router properties"
+    },
+    {
+      "question": "Q5c",
+      "description": "Is /v1/models reliable with no model loaded?",
+      "answer": "yes",
+      "command": "curl http://127.0.0.1:8090/v1/models",
+      "raw_response": "{\"data\":[...],\"object\":\"list\"}",
+      "detail": "Returns 200 with list of registered models"
+    }
+  ]
+}
