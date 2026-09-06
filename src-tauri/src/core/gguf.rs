@@ -38,15 +38,12 @@ fn read_header<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, AppError> {
     reader
         .read_exact(&mut magic_bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read magic number: {}", e),
+            message: format!("failed to read magic number: {e}"),
         })?;
     let magic = u32::from_le_bytes(magic_bytes);
     if magic != GGUF_MAGIC {
         return Err(AppError::GgufParse {
-            message: format!(
-                "bad magic number: expected 0x{:08X}, got 0x{:08X}",
-                GGUF_MAGIC, magic
-            ),
+            message: format!("bad magic number: expected 0x{GGUF_MAGIC:08X}, got 0x{magic:08X}"),
         });
     }
 
@@ -54,26 +51,26 @@ fn read_header<R: Read + Seek>(reader: &mut R) -> Result<GgufHeader, AppError> {
     reader
         .read_exact(&mut version_bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read version: {}", e),
+            message: format!("failed to read version: {e}"),
         })?;
     let version = u32::from_le_bytes(version_bytes);
-    if version < 1 || version > GGUF_VERSION {
+    if !(1..=GGUF_VERSION).contains(&version) {
         return Err(AppError::GgufParse {
-            message: format!("unsupported GGUF version: {}", version),
+            message: format!("unsupported GGUF version: {version}"),
         });
     }
 
     let tensor_count = read_u64(reader)?;
     if tensor_count > MAX_TENSOR_COUNT {
         return Err(AppError::GgufParse {
-            message: format!("tensor count too large: {}", tensor_count),
+            message: format!("tensor count too large: {tensor_count}"),
         });
     }
 
     let kv_count = read_u64(reader)?;
     if kv_count > MAX_KV_COUNT {
         return Err(AppError::GgufParse {
-            message: format!("KV count too large: {}", kv_count),
+            message: format!("KV count too large: {kv_count}"),
         });
     }
 
@@ -90,7 +87,7 @@ fn read_u64<R: Read>(reader: &mut R) -> Result<u64, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read u64: {}", e),
+            message: format!("failed to read u64: {e}"),
         })?;
     Ok(u64::from_le_bytes(bytes))
 }
@@ -101,7 +98,7 @@ fn read_u32<R: Read>(reader: &mut R) -> Result<u32, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read u32: {}", e),
+            message: format!("failed to read u32: {e}"),
         })?;
     Ok(u32::from_le_bytes(bytes))
 }
@@ -111,17 +108,17 @@ fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, AppError> {
     let len = read_u64(reader)?;
     if len > 1_000_000 {
         return Err(AppError::GgufParse {
-            message: format!("string too long: {} bytes", len),
+            message: format!("string too long: {len} bytes"),
         });
     }
     let mut bytes = vec![0u8; len as usize];
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read string: {}", e),
+            message: format!("failed to read string: {e}"),
         })?;
     String::from_utf8(bytes).map_err(|e| AppError::GgufParse {
-        message: format!("string is not valid UTF-8: {}", e),
+        message: format!("string is not valid UTF-8: {e}"),
     })
 }
 
@@ -160,7 +157,7 @@ impl GgufValueType {
             11 => Ok(GgufValueType::String),
             12 => Ok(GgufValueType::Array),
             _ => Err(AppError::GgufParse {
-                message: format!("unknown GGUF value type: {}", v),
+                message: format!("unknown GGUF value type: {v}"),
             }),
         }
     }
@@ -200,7 +197,7 @@ fn read_bool_value<R: Read>(reader: &mut R) -> Result<bool, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read bool: {}", e),
+            message: format!("failed to read bool: {e}"),
         })?;
     Ok(bytes[0] != 0)
 }
@@ -212,14 +209,14 @@ fn skip_value<R: Read + Seek>(reader: &mut R, vtype: GgufValueType) -> Result<()
             reader
                 .seek(SeekFrom::Current(1))
                 .map_err(|e| AppError::GgufParse {
-                    message: format!("failed to skip value: {}", e),
+                    message: format!("failed to skip value: {e}"),
                 })?;
         }
         GgufValueType::Int16 | GgufValueType::UInt16 => {
             reader
                 .seek(SeekFrom::Current(2))
                 .map_err(|e| AppError::GgufParse {
-                    message: format!("failed to skip value: {}", e),
+                    message: format!("failed to skip value: {e}"),
                 })?;
         }
         GgufValueType::Int32
@@ -229,14 +226,14 @@ fn skip_value<R: Read + Seek>(reader: &mut R, vtype: GgufValueType) -> Result<()
             reader
                 .seek(SeekFrom::Current(4))
                 .map_err(|e| AppError::GgufParse {
-                    message: format!("failed to skip value: {}", e),
+                    message: format!("failed to skip value: {e}"),
                 })?;
         }
         GgufValueType::Int64 | GgufValueType::UInt64 | GgufValueType::Float64 => {
             reader
                 .seek(SeekFrom::Current(8))
                 .map_err(|e| AppError::GgufParse {
-                    message: format!("failed to skip value: {}", e),
+                    message: format!("failed to skip value: {e}"),
                 })?;
         }
         GgufValueType::String => {
@@ -244,7 +241,7 @@ fn skip_value<R: Read + Seek>(reader: &mut R, vtype: GgufValueType) -> Result<()
             reader
                 .seek(SeekFrom::Current(len as i64))
                 .map_err(|e| AppError::GgufParse {
-                    message: format!("failed to skip string: {}", e),
+                    message: format!("failed to skip string: {e}"),
                 })?;
         }
     }
@@ -273,7 +270,7 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         reader
             .read_exact(&mut type_buf)
             .map_err(|e| AppError::GgufParse {
-                message: format!("failed to read KV type: {}", e),
+                message: format!("failed to read KV type: {e}"),
             })?;
         let vtype = GgufValueType::from_u32(u32::from_le_bytes(type_buf))?;
 
@@ -281,14 +278,14 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
             GgufValueType::Int8 => {
                 let mut b = [0u8; 1];
                 reader.read_exact(&mut b).map_err(|e| AppError::GgufParse {
-                    message: format!("failed to read i8: {}", e),
+                    message: format!("failed to read i8: {e}"),
                 })?;
                 kv.insert(key, GgufValue::Int8(b[0] as i8));
             }
             GgufValueType::Int16 => {
                 let mut b = [0u8; 2];
                 reader.read_exact(&mut b).map_err(|e| AppError::GgufParse {
-                    message: format!("failed to read i16: {}", e),
+                    message: format!("failed to read i16: {e}"),
                 })?;
                 kv.insert(key, GgufValue::Int16(i16::from_le_bytes(b)));
             }
@@ -303,7 +300,7 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
             GgufValueType::UInt8 => {
                 let mut b = [0u8; 1];
                 reader.read_exact(&mut b).map_err(|e| AppError::GgufParse {
-                    message: format!("failed to read u8: {}", e),
+                    message: format!("failed to read u8: {e}"),
                 })?;
                 kv.insert(key, GgufValue::UInt8(b[0]));
             }
@@ -340,7 +337,7 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
                 reader
                     .read_exact(&mut arr_type_buf)
                     .map_err(|e| AppError::GgufParse {
-                        message: format!("failed to read array type: {}", e),
+                        message: format!("failed to read array type: {e}"),
                     })?;
                 let arr_type = GgufValueType::from_u32(u32::from_le_bytes(arr_type_buf))?;
                 let count = read_u64(&mut reader)?;
@@ -505,7 +502,7 @@ fn read_i32<R: Read>(reader: &mut R) -> Result<i32, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read i32: {}", e),
+            message: format!("failed to read i32: {e}"),
         })?;
     Ok(i32::from_le_bytes(bytes))
 }
@@ -516,7 +513,7 @@ fn read_i64<R: Read>(reader: &mut R) -> Result<i64, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read i64: {}", e),
+            message: format!("failed to read i64: {e}"),
         })?;
     Ok(i64::from_le_bytes(bytes))
 }
@@ -527,7 +524,7 @@ fn read_u16<R: Read>(reader: &mut R) -> Result<u16, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read u16: {}", e),
+            message: format!("failed to read u16: {e}"),
         })?;
     Ok(u16::from_le_bytes(bytes))
 }
@@ -538,7 +535,7 @@ fn read_f32<R: Read>(reader: &mut R) -> Result<f32, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read f32: {}", e),
+            message: format!("failed to read f32: {e}"),
         })?;
     Ok(f32::from_le_bytes(bytes))
 }
@@ -549,7 +546,7 @@ fn read_f64<R: Read>(reader: &mut R) -> Result<f64, AppError> {
     reader
         .read_exact(&mut bytes)
         .map_err(|e| AppError::GgufParse {
-            message: format!("failed to read f64: {}", e),
+            message: format!("failed to read f64: {e}"),
         })?;
     Ok(f64::from_le_bytes(bytes))
 }
@@ -557,7 +554,7 @@ fn read_f64<R: Read>(reader: &mut R) -> Result<f64, AppError> {
 /// Parse GGUF metadata from a file path.
 pub fn parse_file(path: &Path) -> Result<GgufMetadata, AppError> {
     let file = File::open(path).map_err(|e| AppError::GgufParse {
-        message: format!("failed to open {}: {}", path.display(), e),
+        message: format!("failed to open {}: {e}", path.display()),
     })?;
     parse_metadata(file)
 }
@@ -601,7 +598,12 @@ pub fn resolve_model_files(path: &Path) -> Result<Vec<PathBuf>, AppError> {
     };
 
     let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path.file_name().unwrap().to_string_lossy();
+    let name = path
+        .file_name()
+        .ok_or_else(|| AppError::GgufParse {
+            message: format!("path has no file name: {}", path.display()),
+        })?
+        .to_string_lossy();
     // Find the shard pattern -NNNNN-of- and extract base name before it
     let base_name = name
         .split("-of-")
@@ -619,7 +621,7 @@ pub fn resolve_model_files(path: &Path) -> Result<Vec<PathBuf>, AppError> {
 
     let mut shards = Vec::new();
     for i in 1..=total {
-        let shard_path = dir.join(format!("{}-{:05}-of-{:05}.gguf", base, i, total));
+        let shard_path = dir.join(format!("{base}-{i:05}-of-{total:05}.gguf"));
         if !shard_path.exists() {
             return Err(AppError::GgufParse {
                 message: format!(
@@ -645,7 +647,7 @@ pub struct ModelSet {
 /// Scan a directory for GGUF models, resolving shards and projectors.
 pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
     let entries = std::fs::read_dir(dir).map_err(|e| AppError::GgufParse {
-        message: format!("failed to read directory {}: {}", dir.display(), e),
+        message: format!("failed to read directory {}: {e}", dir.display()),
     })?;
 
     let mut models: Vec<PathBuf> = Vec::new();
@@ -653,13 +655,18 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
 
     for entry in entries {
         let entry = entry.map_err(|e| AppError::GgufParse {
-            message: format!("failed to read directory entry: {}", e),
+            message: format!("failed to read directory entry: {e}"),
         })?;
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
-        let name = path.file_name().unwrap().to_string_lossy();
+        let name = path
+            .file_name()
+            .ok_or_else(|| AppError::GgufParse {
+                message: format!("path has no file name: {}", path.display()),
+            })?
+            .to_string_lossy();
         if !name.ends_with(".gguf") {
             continue;
         }
@@ -675,13 +682,26 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for path in models {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let name = path
+            .file_name()
+            .ok_or_else(|| AppError::GgufParse {
+                message: format!("path has no file name: {}", path.display()),
+            })?
+            .to_string_lossy()
+            .to_string();
         if seen.contains(&name) {
             continue;
         }
         let files = resolve_model_files(&path)?;
         for f in &files {
-            seen.insert(f.file_name().unwrap().to_string_lossy().to_string());
+            seen.insert(
+                f.file_name()
+                    .ok_or_else(|| AppError::GgufParse {
+                        message: format!("path has no file name: {}", f.display()),
+                    })?
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
         sets.push(ModelSet {
             model_files: files,
@@ -691,14 +711,26 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
 
     // Match projectors to models by base name
     for proj in projectors {
-        let proj_name = proj.file_name().unwrap().to_string_lossy().to_string();
+        let proj_name = proj
+            .file_name()
+            .ok_or_else(|| AppError::GgufParse {
+                message: format!("path has no file name: {}", proj.display()),
+            })?
+            .to_string_lossy()
+            .to_string();
         let model_base = proj_name
             .strip_prefix("mmproj-")
             .map(|s| s.to_string())
             .unwrap_or_default();
         for set in &mut sets {
             if let Some(first) = set.model_files.first() {
-                let model_name = first.file_name().unwrap().to_string_lossy().to_string();
+                let model_name = first
+                    .file_name()
+                    .ok_or_else(|| AppError::GgufParse {
+                        message: format!("path has no file name: {}", first.display()),
+                    })?
+                    .to_string_lossy()
+                    .to_string();
                 if model_name.starts_with(&model_base) {
                     set.projector = Some(proj.clone());
                 }

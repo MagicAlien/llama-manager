@@ -21,6 +21,7 @@
 pub mod backend_selection;
 pub mod env_probe;
 pub mod flag_verify;
+#[allow(dead_code)]
 pub mod gguf;
 pub mod gh_releases;
 pub mod installer;
