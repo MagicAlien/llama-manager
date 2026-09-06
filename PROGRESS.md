@@ -17,11 +17,15 @@ Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR
 
 ## In progress
 
-*(nothing — T-022 is Done, PR #13, merged into `main`. Take the next unblocked task: T-023 (flag verification) and T-024 (install UI) are the next candidates; T-006 is still `Blocked` on D-005.)*
+*(nothing — T-030 is Done, PR #19+20, merged into `main`. Take the next unblocked task: T-031 (Model registry) depends on this task and is now unblocked; T-006 remains `Blocked` on D-005.)*
 
 ---
 
 ## Done
+
+- **T-030** — GGUF header reader with shard and projector support · PR #19 + #20 · 6 September 2026
+  - Note: `core/gguf.rs` — parse GGUF magic, version, tensor count, and KV metadata without reading tensor data. Handles architectures: llama, mistral, qwen, gemma, phi, mixtral (MoE), NVFP4. Shard resolution (`-NNNNN-of-NNNNN.gguf` pattern), projector file matching (`mmproj-*` prefix), directory scanning. All 22 GGUF tests pass including 2 proptest properties. Clippy clean after PR #20 fix (unwrap → ok_or_else, uninlined_format_args, manual_range_contains).
+  - Note: T-023 (flag verification) and T-024 (install UI) are the next candidates; T-006 is still `Blocked` on D-005.
 
 - **T-023** — Flag verification and registration channel · PR #14 · 5 September 2026
   - Note: `core/flag_verify.rs` — parses `llama-server.exe --help` into `Vec<VerifiedFlag>` (name, takes_value, allowed_values), detects health endpoint from help text, derives registration channel. Tested against four real builds of different ages: `b10809`, `b7213`, `b5559`, `b9196`. Production path wired into `install_runtime` IPC handler; headless `install-verify` and `export-verified-flags` subcommands added to main binary. `docs/verified-flags.md` generated via `scripts/export-verified-flags.ps1` (byte-stable, snapshot assert).
