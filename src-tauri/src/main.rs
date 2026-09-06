@@ -95,7 +95,13 @@ fn main() {
             ipc::activate_runtime,
             ipc::remove_runtime,
             ipc::get_active_runtime,
-            ipc::get_server_state
+            ipc::get_server_state,
+            ipc::import_models,
+            ipc::get_import_status,
+            ipc::list_models,
+            ipc::remove_model,
+            ipc::add_watched_folder,
+            ipc::list_watched_folders
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

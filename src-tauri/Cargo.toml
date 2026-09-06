@@ -67,6 +67,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "r
 # bzip2/lzma/zstd/xz/aes stay out of the dependency tree.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
