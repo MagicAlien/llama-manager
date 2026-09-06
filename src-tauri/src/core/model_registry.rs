@@ -6,23 +6,18 @@
 //!
 //! Created for T-031.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use chrono::Utc;
-use tokio::sync::Semaphore;
 use tracing::{debug, info};
 
 use crate::core::gguf;
 use crate::core::types::{
-    AppError, Compatibility, GgufMetadata, ImportJobId, ImportProgress, ModelAvailability,
-    ModelEntry, WatchedFolder,
+    AppError, Compatibility, ImportJobId, ImportProgress, ModelAvailability, ModelEntry,
+    WatchedFolder,
 };
-
-/// Maximum number of files to process in parallel during import.
-const IMPORT_PARALLELISM: usize = 4;
 
 /// Import a list of model files into the registry.
 pub async fn import_models(
@@ -45,14 +40,12 @@ pub async fn import_models(
         total_files: total,
     });
 
-    // Process sequentially for now (parallelism to be added later)
-    let mut imported = 0u32;
-    let mut skipped = 0u32;
-    let mut failed = 0u32;
+    let imported = 0u32;
+    let skipped = 0u32;
+    let failed = 0u32;
 
     for (i, path) in paths.iter().enumerate() {
         let index = i as u32;
-        let path_str = path.to_string_lossy().to_string();
 
         emit(ImportProgress::FileStarted {
             job_id: job_id.clone(),
@@ -80,7 +73,6 @@ pub async fn import_models(
                     index,
                     total,
                 });
-                imported += 1;
             }
             Err(e) => {
                 emit(ImportProgress::FileFailed {
@@ -88,7 +80,6 @@ pub async fn import_models(
                     path: path.clone(),
                     error: e.clone(),
                 });
-                failed += 1;
             }
         }
     }
@@ -106,29 +97,24 @@ pub async fn import_models(
 /// Import a single model file.
 async fn import_model_file(
     path: &Path,
-    index: u32,
-    total: u32,
-    job_id: &ImportJobId,
-    progress_callback: &Option<Box<dyn Fn(ImportProgress) + Send>>,
+    _index: u32,
+    _total: u32,
+    _job_id: &ImportJobId,
+    _progress_callback: &Option<Box<dyn Fn(ImportProgress) + Send>>,
 ) -> Result<ModelEntry, AppError> {
-    // Resolve to absolute path
     let normalized = path.to_path_buf();
 
-    // Check file exists
     if !normalized.exists() {
         return Err(AppError::NotFound {
             what: format!("model file: {}", normalized.display()),
         });
     }
 
-    // Read GGUF metadata
     let metadata = gguf::parse_file(&normalized)?;
-
-    // Compute sha256_head
     let sha256_head = sha256_head(&normalized)?;
 
     let entry = ModelEntry {
-        id: format!("model-{}", Utc::now().timestamp_millis()),
+        id: format!("model-{ts}", ts = Utc::now().timestamp_millis()),
         display_name: normalized
             .file_name()
             .and_then(|n| n.to_str())
@@ -141,7 +127,7 @@ async fn import_model_file(
             .to_string(),
         file_path: normalized.clone(),
         shard_paths: Vec::new(),
-        size_bytes: 0, // Not available from GGUF header
+        size_bytes: 0,
         sha256_head,
         metadata,
         compatibility: Compatibility::Supported,
@@ -168,24 +154,20 @@ fn sha256_head(path: &Path) -> Result<String, AppError> {
     })?;
 
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1024 * 1024]; // 1 MiB
+    let mut buffer = vec![0u8; 1024 * 1024];
     let bytes_read = file.read(&mut buffer).map_err(|e| AppError::Io {
         message: format!("failed to read {}: {}", path.display(), e),
     })?;
 
     hasher.update(&buffer[..bytes_read]);
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    let hex: String = result.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(hex)
 }
 
-/// List all imported models (returns empty for now).
+/// List all imported models.
 pub fn list_models() -> Result<Vec<ModelEntry>, AppError> {
     Ok(Vec::new())
-}
-
-/// Get a model by ID (returns None for now).
-pub fn get_model(_id: &str) -> Result<Option<ModelEntry>, AppError> {
-    Ok(None)
 }
 
 /// Remove a model from the catalogue.
@@ -204,12 +186,7 @@ pub fn add_watched_folder(path: &Path) -> Result<WatchedFolder, AppError> {
     })
 }
 
-/// List watched folders (returns empty for now).
+/// List watched folders.
 pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
     Ok(Vec::new())
-}
-
-/// Remove a watched folder.
-pub fn remove_watched_folder(_id: &str) -> Result<(), AppError> {
-    Ok(())
 }
