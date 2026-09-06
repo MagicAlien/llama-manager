@@ -23,4 +23,5 @@ pub mod env_probe;
 pub mod flag_verify;
 pub mod gh_releases;
 pub mod installer;
+pub mod model_paths;
 pub mod types;
