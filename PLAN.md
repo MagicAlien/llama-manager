@@ -79,7 +79,7 @@ A user with hundreds of gigabytes of models spread across several drives adds th
 
 **Preliminary evidence, recorded in `PROGRESS.md` F-000, points at the preset being able to declare paths.** Upstream documentation describes the router discovering models from the scan *and* from the preset, and an upstream discussion advises keeping models outside the scanned directory and naming them by absolute path in the preset. That is not confirmation — it is documentation and a forum answer, not the `--help` of the pinned build — but it is enough to say that the scan-only branch below is now the unlikely case rather than the coin flip it was written as. Nothing about the design changes; the order of expectation does.
 
-**This is answered by reading `--help` for the pinned build** — no GPU, no model files, no target machine. T-023 captures and parses that output during Milestone B, before T-033 needs it.
+**This is answered by running the pinned build against prepared fixtures** — no GPU, no model files, no target machine. T-023 captures and parses `--help` during Milestone B; T-025 then runs the same CPU build in router mode against a prepared directory structure and observes actual behaviour. Observed behaviour beats an inference from help text, even when the two agree.
 
 Four questions sit together and are answered in one sitting with a real binary:
 
@@ -113,9 +113,7 @@ Only the first is answerable from `--help`, and T-023 answers it there. **The ot
   - **Symlinks unavailable, model on the same volume as the app data directory:** hard link, equally exact.
   - **Neither:** the app cannot register that model under scan-only, and says so plainly, with an explanation that enabling Developer Mode resolves it. It does not silently link a whole folder and hope.
 
-  **One question this cannot answer without a binary:** whether llama-server's directory scan follows reparse points at all. If it resolves symlinks and junctions, the fallback works; if it skips them, the fallback does not exist in any form. `--help` will not say. This goes to `docs/owner-verification.md` and is a ten-minute check.
-
-T-023 **must record which outcome holds** in the Facts established section of `PROGRESS.md` before T-033 begins. T-033 branches on it; it does not guess.
+T-025 **must record which outcome holds** in the Facts established section of `PROGRESS.md` before T-033 begins. T-033 branches on it; it does not guess.
 
 **If the outcome is `Undetermined`, work stops rather than falling back.** Defaulting to scan-only would look like the safe choice and is not: it carries a privilege dependency and an unverified assumption about reparse points, either of which can fail on a user's machine in a way no test here would catch. The right response is the empirical check, which is minutes with a real binary, not a guess that propagates into Milestone D.
 
