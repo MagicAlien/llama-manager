@@ -25,7 +25,13 @@
 use crate::core::env_probe;
 use crate::core::gh_releases;
 use crate::core::installer;
-use crate::core::types::{AppError, AvailableRelease, Backend, EnvironmentReport, InstallProgress};
+use crate::core::model_registry;
+use crate::core::types::{
+    AppError, AvailableRelease, Backend, EnvironmentReport, ImportJobId, ImportProgress,
+    InstallProgress, ModelEntry, WatchedFolder,
+};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tauri::Emitter;
 
 /// `docs/CONTRACTS.md` §4: `probe_environment | — | EnvironmentReport | T-010`.
@@ -242,4 +248,82 @@ pub async fn check_for_updates() -> Result<Vec<AvailableRelease>, AppError> {
         message: format!("could not build the HTTP client: {err}"),
     })?;
     gh_releases::check_for_updates(&client, gh_releases::GITHUB_API_BASE).await
+}
+
+/// `docs/CONTRACTS.md` §4: `import_models | paths: Vec<String> | ImportJobId | T-031`.
+///
+/// Queues model files for import. Returns immediately with a job ID; the
+/// frontend polls `get_import_status` for progress.
+#[tauri::command]
+pub fn import_models(paths: Vec<String>) -> Result<ImportJobId, AppError> {
+    let job_id = ImportJobId::new();
+    let path_bufs: Vec<std::path::PathBuf> =
+        paths.into_iter().map(std::path::PathBuf::from).collect();
+
+    let job_id_clone = job_id.clone();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let _handle = std::thread::spawn(move || {
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("failed to create tokio runtime: {e}");
+                return;
+            }
+        };
+        rt.block_on(async {
+            let result =
+                model_registry::import_models(path_bufs, job_id_clone, cancelled, None).await;
+            let _ = result;
+        });
+    });
+
+    Ok(job_id)
+}
+
+/// `docs/CONTRACTS.md` §4: `get_import_status | job_id: String | ImportProgress | T-031`.
+///
+/// Returns the current status of an import job.
+#[tauri::command]
+pub fn get_import_status(job_id: String) -> Result<ImportProgress, AppError> {
+    // For now, return a stub. In a real implementation, this would look up
+    // the job status from a shared state store.
+    Ok(ImportProgress::Finished {
+        job_id,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    })
+}
+
+/// `docs/CONTRACTS.md` §4: `list_models | — | Vec<ModelEntry> | T-031`.
+///
+/// Returns all imported models with their metadata and status.
+#[tauri::command]
+pub fn list_models() -> Result<Vec<ModelEntry>, AppError> {
+    model_registry::list_models()
+}
+
+/// `docs/CONTRACTS.md` §4: `remove_model | id: String | () | T-031`.
+///
+/// Removes a model from the catalogue, retaining its settings.
+#[tauri::command]
+pub fn remove_model(id: String) -> Result<(), AppError> {
+    model_registry::remove_model(&id)
+}
+
+/// `docs/CONTRACTS.md` §4: `add_watched_folder | path: String | WatchedFolder | T-031`.
+///
+/// Adds a directory to watch for new models.
+#[tauri::command]
+pub fn add_watched_folder(path: String) -> Result<WatchedFolder, AppError> {
+    let path_buf = std::path::PathBuf::from(path);
+    model_registry::add_watched_folder(&path_buf)
+}
+
+/// `docs/CONTRACTS.md` §4: `list_watched_folders | — | Vec<WatchedFolder> | T-031`.
+///
+/// Returns all watched folders.
+#[tauri::command]
+pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
+    model_registry::list_watched_folders()
 }

@@ -26,4 +26,5 @@ pub mod gguf;
 pub mod gh_releases;
 pub mod installer;
 pub mod model_paths;
+pub mod model_registry;
 pub mod types;
