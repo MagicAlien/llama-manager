@@ -21,6 +21,7 @@
 pub mod backend_selection;
 pub mod env_probe;
 pub mod flag_verify;
+pub mod gguf;
 pub mod gh_releases;
 pub mod installer;
 pub mod model_paths;
