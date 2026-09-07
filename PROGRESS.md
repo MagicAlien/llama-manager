@@ -17,15 +17,27 @@ Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR
 
 ## In progress
 
-*(nothing — T-030 is Done, PR #19+20, merged into `main`. Take the next unblocked task: T-031 (Model registry) depends on this task and is now unblocked; T-006 remains `Blocked` on D-005.)*
+*(nothing — T-031 is Done, PR #21, merged into `main`. Take the next unblocked task: T-006 remains `Blocked` on D-005.)*
 
 ---
 
 ## Done
 
+- **T-031** — Model registry backend (import, list, remove) · PR #21 · 6 September 2026
+  - Note: `core/model_registry.rs` — import models by path (GGUF parsing, sha256_head), list models, remove models, add/list watched folders. Import progress tracking with cancellation. IPC commands: `import_models`, `list_models`, `remove_model`, `add_watched_folder`, `list_watched_folders`. Types: `ImportJobId`, `ImportProgress` (Queued/FileStarted/FileDone/FileFailed/Finished/Cancelled), `WatchedFolder`. Identity is absolute path (PLAN.md §2.13). All 128 Rust tests + 8 npm tests pass. CI green.
+  - Note: T-006 remains `Blocked` on D-005.
+
 - **T-030** — GGUF header reader with shard and projector support · PR #19 + #20 · 6 September 2026
   - Note: `core/gguf.rs` — parse GGUF magic, version, tensor count, and KV metadata without reading tensor data. Handles architectures: llama, mistral, qwen, gemma, phi, mixtral (MoE), NVFP4. Shard resolution (`-NNNNN-of-NNNNN.gguf` pattern), projector file matching (`mmproj-*` prefix), directory scanning. All 22 GGUF tests pass including 2 proptest properties. Clippy clean after PR #20 fix (unwrap → ok_or_else, uninlined_format_args, manual_range_contains).
   - Note: T-023 (flag verification) and T-024 (install UI) are the next candidates; T-006 is still `Blocked` on D-005.
+
+- **T-025** — Empirical router probe · PR #16 + #17 · 6 September 2026
+  - Note: Ran CPU build b9196 in router mode against prepared fixtures. Q1: `--models-preset` accepts absolute paths (confirmed). Q2: `--models-dir` scan follows file symlinks and directory junctions. Q3: Scan depth is one level (two levels down not registered). Q4: `mmproj` key in preset INI crashes server (GGML assertion failure) — projectors must use scan channel with filename prefix. Q5: All three health endpoints (`/health`, `/props`, `/v1/models`) return 200 with no model loaded.
+  - Note: Registration channel confirmed: `PresetDeclaresPath` (F-011). F-000 promoted to confirmed (F-012). D-004 opened: preset channel does not support projector models.
+  - Note: `scripts/probe-router.ps1` (291 lines), `scripts/make-minimal-gguf.py`, `fixtures/` (5 .gguf + 5 .ini), `probe-results.json`, `docs/probe-router-notes.md`.
+
+- **T-024** — Version management UI · PR #15 + fix `50c7fa5` · 5 September 2026
+  - Note: `src/screens/VersionManagement.tsx` — grid layout of installed builds with active badge, per-build actions (activate, remove), undetermined flag warning badge. Runtime screen routes to version management when builds exist. IPC commands: `list_runtimes`, `activate_runtime`, `remove_runtime`, `get_active_runtime`, `get_server_state`. Full gate green: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (128 passed), `npm run lint` (clean), `npm run test` (8 passed).
 
 - **T-023** — Flag verification and registration channel · PR #14 · 5 September 2026
   - Note: `core/flag_verify.rs` — parses `llama-server.exe --help` into `Vec<VerifiedFlag>` (name, takes_value, allowed_values), detects health endpoint from help text, derives registration channel. Tested against four real builds of different ages: `b10809`, `b7213`, `b5559`, `b9196`. Production path wired into `install_runtime` IPC handler; headless `install-verify` and `export-verified-flags` subcommands added to main binary. `docs/verified-flags.md` generated via `scripts/export-verified-flags.ps1` (byte-stable, snapshot assert).
