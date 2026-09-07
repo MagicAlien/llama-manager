@@ -17,11 +17,15 @@ Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR
 
 ## In progress
 
-*(nothing — T-032 is Done, PR #22, merged into `main`. Take the next unblocked task: T-006 remains `Blocked` on D-005.)*
+*(nothing — T-033 is Done, PR #23, merged into `main`. Take the next unblocked task: T-006 remains `Blocked` on D-005.)*
 
 ---
 
 ## Done
+
+- **T-033** — Preset generator · PR #23 · 7 September 2026
+  - Note: `core/preset_generator.rs` — serializes every registered model into `presets.ini` and generates the router command line. Branches on `RuntimeBuild.registration_channel` as established empirically by T-025 (PresetDeclaresPath). Implements `generate_preset`, `preview_preset`, `router_arguments`, and `append_launch_params`. Adds IPC command `preview_preset(id)` for the model detail screen to show a live preset preview without writing to disk. Comprehensive test suite: 7 unit tests covering PresetDeclaresPath, ScanOnly, and Undetermined channels, router arguments generation, and preview. Full gate green: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (200 passed), `npm run lint` (clean), `npm run test` (8 passed). CI green on merged head.
+  - Note: T-006 remains `Blocked` on D-005.
 
 - **T-032** — VRAM estimator · PR #22 · 7 September 2026
   - Note: `core/estimator.rs` — standalone VRAM estimation model as pure function per AGENTS.md invariant 5. Implements formula from docs/CONTRACTS.md §1: weights_gpu + kv_cache + compute_buffer + C_context. GQA-aware KV cache calculation (head_count_kv = head_count / groups). History-based calibration with bias correction from non-matching launches. Graceful degradation with 25% margin when metadata is missing. IPC command `estimate_vram(id, params)` registered. Comprehensive test suite: 8+ table-driven configurations, property tests (monotonicity, bounds), term-by-term assertions, and 8 insta snapshots for regression protection.
