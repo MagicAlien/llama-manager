@@ -11,7 +11,7 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 7 September 2026 — T-029 (Model paths and availability) is **Done**, PR #24, merged into `main`. Full gate green locally: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (205 passed), `npm run lint` (clean), `npm run test` (8 passed). New module: `core/model_paths.rs` (normalize, preset_literal, probe, link_into, unlink, link_capability). 15 tests (13 unit + 2 proptest properties). Next candidate: T-031 (Model registry backend) — depends on T-029 which is now done.
+Last updated: 7 September 2026 — T-034 (Models screen) is **Done**, PR #25, merged into `main`. Full gate green locally: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (205 passed), `npm run lint` (clean), `npm run test` (11 passed). New screen: `src/screens/Models.tsx` with model list, import, remove, preload/pin toggles, compatibility and availability badges, watched folders, empty state. New components: Badge, Switch, Dialog. 3 new tests in Models.test.tsx. Next candidate: T-035 (Model detail screen) — depends on T-034 which is now done.
 
 ---
 
@@ -22,6 +22,10 @@ Last updated: 7 September 2026 — T-029 (Model paths and availability) is **Don
 ---
 
 ## Done
+
+- **T-034** — Models screen · PR #25 · 7 September 2026
+  - Note: `src/screens/Models.tsx` — model list with metadata (name, size, params, quantization, architecture, shard count). Import via .gguf file picker (multiple). Remove with confirmation dialog explaining settings retained by path. Preload/pin toggles (independent, disabled when not Present). Compatibility badges: Supported (green), Warnings (amber), Experimental (blue), Unsupported (red). Availability badges: Present (green), Missing (red), Unreadable (amber) with path shown. Duplicate and MoE indicators. Watched folders list with model counts. Empty state with call-to-action. Preset change banner. New components: Badge, Switch, Dialog. IPC: import_models, list_models, remove_model, add_watched_folder, list_watched_folders, set_model_preload, set_model_pinned. Tests: Models.test.tsx (3 tests). T-006 remains `Blocked` on D-005.
+
 
 - **T-029** — Model paths and availability · PR #24 · 7 September 2026
   - Note: `core/model_paths.rs` — normalize (idempotent canonicalization, handles nonexistent paths), preset_literal (INI-safe escaping), probe (ModelAvailability: Present/Missing/Unreadable), link_into (symlink first, hard link fallback, destination validation), unlink, link_capability (cached capability probe). 15 tests: 13 unit + 2 proptest properties (idempotency, round-trip). No junctions for files. No file copied or moved.
@@ -38,6 +42,10 @@ Last updated: 7 September 2026 — T-029 (Model paths and availability) is **Don
 ---
 
 ## Done
+
+- **T-034** — Models screen · PR #25 · 7 September 2026
+  - Note: `src/screens/Models.tsx` — model list with metadata (name, size, params, quantization, architecture, shard count). Import via .gguf file picker (multiple). Remove with confirmation dialog explaining settings retained by path. Preload/pin toggles (independent, disabled when not Present). Compatibility badges: Supported (green), Warnings (amber), Experimental (blue), Unsupported (red). Availability badges: Present (green), Missing (red), Unreadable (amber) with path shown. Duplicate and MoE indicators. Watched folders list with model counts. Empty state with call-to-action. Preset change banner. New components: Badge, Switch, Dialog. IPC: import_models, list_models, remove_model, add_watched_folder, list_watched_folders, set_model_preload, set_model_pinned. Tests: Models.test.tsx (3 tests). T-006 remains `Blocked` on D-005.
+
 
 - **T-032** — VRAM estimator · PR #22 · 7 September 2026
   - Note: `core/estimator.rs` — standalone VRAM estimation model as pure function per AGENTS.md invariant 5. Implements formula from docs/CONTRACTS.md §1: weights_gpu + kv_cache + compute_buffer + C_context. GQA-aware KV cache calculation (head_count_kv = head_count / groups). History-based calibration with bias correction from non-matching launches. Graceful degradation with 25% margin when metadata is missing. IPC command `estimate_vram(id, params)` registered. Comprehensive test suite: 8+ table-driven configurations, property tests (monotonicity, bounds), term-by-term assertions, and 8 insta snapshots for regression protection.
