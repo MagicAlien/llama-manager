@@ -27,6 +27,14 @@ Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR
   - Note: `core/estimator.rs` — standalone VRAM estimation model as pure function per AGENTS.md invariant 5. Implements formula from docs/CONTRACTS.md §1: weights_gpu + kv_cache + compute_buffer + C_context. GQA-aware KV cache calculation (head_count_kv = head_count / groups). History-based calibration with bias correction from non-matching launches. Graceful degradation with 25% margin when metadata is missing. IPC command `estimate_vram(id, params)` registered. Comprehensive test suite: 8+ table-driven configurations, property tests (monotonicity, bounds), term-by-term assertions, and 8 insta snapshots for regression protection.
   - Note: T-006 remains `Blocked` on D-005.
 
+---
+
+## Done
+
+- **T-032** — VRAM estimator · PR #22 · 7 September 2026
+  - Note: `core/estimator.rs` — standalone VRAM estimation model as pure function per AGENTS.md invariant 5. Implements formula from docs/CONTRACTS.md §1: weights_gpu + kv_cache + compute_buffer + C_context. GQA-aware KV cache calculation (head_count_kv = head_count / groups). History-based calibration with bias correction from non-matching launches. Graceful degradation with 25% margin when metadata is missing. IPC command `estimate_vram(id, params)` registered. Comprehensive test suite: 8+ table-driven configurations, property tests (monotonicity, bounds), term-by-term assertions, and 8 insta snapshots for regression protection.
+  - Note: T-006 remains `Blocked` on D-005.
+
 - **T-031** — Model registry backend (import, list, remove) · PR #21 · 6 September 2026
   - Note: `core/model_registry.rs` — import models by path (GGUF parsing, sha256_head), list models, remove models, add/list watched folders. Import progress tracking with cancellation. IPC commands: `import_models`, `list_models`, `remove_model`, `add_watched_folder`, `list_watched_folders`. Types: `ImportJobId`, `ImportProgress` (Queued/FileStarted/FileDone/FileFailed/Finished/Cancelled), `WatchedFolder`. Identity is absolute path (PLAN.md §2.13). All 128 Rust tests + 8 npm tests pass. CI green.
   - Note: T-006 remains `Blocked` on D-005.

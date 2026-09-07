@@ -27,6 +27,7 @@ use crate::core::estimator;
 use crate::core::gh_releases;
 use crate::core::installer;
 use crate::core::model_registry;
+use crate::core::preset_generator;
 use crate::core::types::{
     AppError, AvailableRelease, Backend, EnvironmentReport, EstimateInputs, ImportJobId,
     ImportProgress, InstallProgress, ModelEntry, VramEstimate, WatchedFolder,
@@ -357,4 +358,30 @@ pub fn estimate_vram(
 
     // No history for now — T-041 writes launch_history, T-032 reads it
     Ok(estimator::estimate(&inputs, &[]))
+}
+
+/// `docs/CONTRACTS.md` §4: `preview_preset | id: String | String | T-033`.
+///
+/// Returns a preview of the preset INI content for a single model,
+/// without writing to disk. Used by the model detail screen to show
+/// the user what the preset would look like.
+#[tauri::command]
+pub fn preview_preset(id: String) -> Result<String, AppError> {
+    let models = model_registry::list_models()?;
+    let model = models
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| AppError::NotFound {
+            what: format!("model {id}"),
+        })?;
+
+    let builds = list_runtimes()?;
+    let build = builds
+        .into_iter()
+        .find(|b| b.is_active)
+        .ok_or_else(|| AppError::NotFound {
+            what: "active runtime build".to_string(),
+        })?;
+
+    preset_generator::preview_preset(&model, &build)
 }
