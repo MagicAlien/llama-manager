@@ -7,21 +7,23 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog } from "@/components/ui/dialog";
 import { Loading } from "@/components/ui/loading";
 
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+function formatSize(bytes: number | bigint): string {
+  const b = typeof bytes === "bigint" ? Number(bytes) : bytes;
+  if (b >= 1024 * 1024 * 1024) {
+    return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  if (b >= 1024 * 1024) {
+    return `${(b / (1024 * 1024)).toFixed(0)} MB`;
   }
-  return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(b / 1024).toFixed(0)} KB`;
 }
 
-function formatParamCount(count: number): string {
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}k`;
+function formatParamCount(count: bigint | null): string {
+  if (count === null) return "0";
+  if (count >= 1000n) {
+    return `${(Number(count) / 1000).toFixed(1)}k`;
   }
-  return `${count}`;
+  return `${Number(count)}`;
 }
 
 function compatibilityBadge(compat: Compatibility) {
@@ -74,7 +76,13 @@ export function ModelsScreen() {
   }, []);
 
   const handleImportFiles = async (files: FileList) => {
-    const paths = Array.from(files).map((f) => f.path);
+    if (!files || files.length === 0) return;
+    const paths: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const webkitRelativePath = (f as any).webkitRelativePath;
+      paths.push(webkitRelativePath || f.name);
+    }
     if (paths.length === 0) return;
 
     setImporting(true);
@@ -132,7 +140,11 @@ export function ModelsScreen() {
               accept=".gguf"
               multiple
               className="hidden"
-              onChange={(e) => handleImportFiles(e.target.files)}
+              onChange={(e) => {
+                if (e.target.files) {
+                  handleImportFiles(e.target.files);
+                }
+              }}
             />
           </label>
           <button
@@ -177,7 +189,11 @@ export function ModelsScreen() {
                 accept=".gguf"
                 multiple
                 className="hidden"
-                onChange={(e) => handleImportFiles(e.target.files)}
+                onChange={(e) => {
+                if (e.target.files) {
+                  handleImportFiles(e.target.files);
+                }
+              }}
               />
             </label>
           </div>
@@ -251,7 +267,7 @@ export function ModelsScreen() {
           <h2 className="text-sm font-semibold text-foreground">{strings.screens.models.watchedFolders}</h2>
           <div className="mt-2 space-y-1">
             {watchedFolders.map((folder) => (
-              <div key={folder.id} className="flex items-center justify-between text-sm text-muted-foreground">
+              <div key={folder.path} className="flex items-center justify-between text-sm text-muted-foreground">
                 <span>{folder.path}</span>
                 <span className="text-xs">{folder.model_count} {strings.screens.models.modelsCount}</span>
               </div>
