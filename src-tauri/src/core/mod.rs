@@ -20,6 +20,9 @@
 
 pub mod backend_selection;
 pub mod env_probe;
+pub mod estimator;
+#[cfg(test)]
+mod estimator_tests;
 pub mod flag_verify;
 #[allow(dead_code)]
 pub mod gguf;

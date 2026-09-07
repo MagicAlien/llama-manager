@@ -1,0 +1,15 @@
+---
+source: src/core/estimator_tests.rs
+expression: estimate
+---
+{
+  "recommended_gpu_layers": 32,
+  "estimated_vram_bytes": 9880733614,
+  "estimated_ram_bytes": 268435456,
+  "kv_cache_bytes": 268435456,
+  "fits_fully": true,
+  "confidence": "Heuristic",
+  "notes": [
+    "Conservative margin: 12%"
+  ]
+}
