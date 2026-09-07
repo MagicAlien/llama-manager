@@ -11,7 +11,7 @@ Protocol: `docs/WORKFLOW.md`. Rules: `AGENTS.md`.
 - **Discrepancies** — a `resolved` entry keeps its one-line summary and its resolution, and loses its working detail.
 - **Facts established — never pruned.** Every line there cost an experiment to learn. Deleting one means a future session rediscovers it the expensive way, which is the exact failure this file exists to prevent. If the file must get shorter, it gets shorter somewhere else.
 
-Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR #15, merged into `main` (`merge_commit_sha fe6a3183`) + fix `50c7fa5` (get_server_state IPC command). Full gate green locally: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (128 passed), `npm run lint` (clean), `npm run test` (8 passed). CI green on merged head. New IPC commands: `list_runtimes`, `activate_runtime`, `remove_runtime`, `get_active_runtime`, `get_server_state`. New UI: `VersionManagement.tsx` with grid layout of installed builds, active badge, per-build actions, undetermined flag. Runtime screen routes to version management when builds exist. Next candidate: T-025 (router questions).
+Last updated: 7 September 2026 — T-029 (Model paths and availability) is **Done**, PR #24, merged into `main`. Full gate green locally: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (205 passed), `npm run lint` (clean), `npm run test` (8 passed). New module: `core/model_paths.rs` (normalize, preset_literal, probe, link_into, unlink, link_capability). 15 tests (13 unit + 2 proptest properties). Next candidate: T-031 (Model registry backend) — depends on T-029 which is now done.
 
 ---
 
@@ -22,6 +22,10 @@ Last updated: 5 September 2026 — T-024 (Version management UI) is **Done**, PR
 ---
 
 ## Done
+
+- **T-029** — Model paths and availability · PR #24 · 7 September 2026
+  - Note: `core/model_paths.rs` — normalize (idempotent canonicalization, handles nonexistent paths), preset_literal (INI-safe escaping), probe (ModelAvailability: Present/Missing/Unreadable), link_into (symlink first, hard link fallback, destination validation), unlink, link_capability (cached capability probe). 15 tests: 13 unit + 2 proptest properties (idempotency, round-trip). No junctions for files. No file copied or moved.
+  - Note: T-006 remains `Blocked` on D-005.
 
 - **T-033** — Preset generator · PR #23 · 7 September 2026
   - Note: `core/preset_generator.rs` — serializes every registered model into `presets.ini` and generates the router command line. Branches on `RuntimeBuild.registration_channel` as established empirically by T-025 (PresetDeclaresPath). Implements `generate_preset`, `preview_preset`, `router_arguments`, and `append_launch_params`. Adds IPC command `preview_preset(id)` for the model detail screen to show a live preset preview without writing to disk. Comprehensive test suite: 7 unit tests covering PresetDeclaresPath, ScanOnly, and Undetermined channels, router arguments generation, and preview. Full gate green: `cargo fmt --check` (clean), `cargo clippy -- -D warnings` (clean), `cargo test` (200 passed), `npm run lint` (clean), `npm run test` (8 passed). CI green on merged head.
