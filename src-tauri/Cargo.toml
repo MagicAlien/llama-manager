@@ -81,3 +81,4 @@ proptest = "1"
 # T-022: scratch directories for installer tests (per PLAN.md §3's dev-dep
 # note).
 tempfile = "3"
+insta = { version = "1.48.0", features = ["json"] }

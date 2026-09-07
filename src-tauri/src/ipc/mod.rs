@@ -23,12 +23,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::core::env_probe;
+use crate::core::estimator;
 use crate::core::gh_releases;
 use crate::core::installer;
 use crate::core::model_registry;
 use crate::core::types::{
-    AppError, AvailableRelease, Backend, EnvironmentReport, ImportJobId, ImportProgress,
-    InstallProgress, ModelEntry, WatchedFolder,
+    AppError, AvailableRelease, Backend, EnvironmentReport, EstimateInputs, ImportJobId,
+    ImportProgress, InstallProgress, ModelEntry, VramEstimate, WatchedFolder,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -326,4 +327,34 @@ pub fn add_watched_folder(path: String) -> Result<WatchedFolder, AppError> {
 #[tauri::command]
 pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
     model_registry::list_watched_folders()
+}
+
+/// `docs/CONTRACTS.md` §4: `estimate_vram | id: String, LaunchParams | VramEstimate | T-032`.
+///
+/// Estimates VRAM usage for a model with the given launch parameters.
+/// This is a pure function — no database access, no side effects.
+#[tauri::command]
+pub fn estimate_vram(
+    id: String,
+    params: crate::core::types::LaunchParams,
+) -> Result<VramEstimate, AppError> {
+    let models = model_registry::list_models()?;
+    let model = models
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| AppError::NotFound {
+            what: format!("model {id}"),
+        })?;
+
+    let inputs = EstimateInputs {
+        metadata: model.metadata,
+        file_size_bytes: model.size_bytes,
+        params,
+        // Use a large default VRAM; the caller can override via params
+        vram_free_bytes: 24 * 1024 * 1024 * 1024,
+        ram_free_bytes: 16 * 1024 * 1024 * 1024,
+    };
+
+    // No history for now — T-041 writes launch_history, T-032 reads it
+    Ok(estimator::estimate(&inputs, &[]))
 }

@@ -101,7 +101,8 @@ fn main() {
             ipc::list_models,
             ipc::remove_model,
             ipc::add_watched_folder,
-            ipc::list_watched_folders
+            ipc::list_watched_folders,
+            ipc::estimate_vram
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
