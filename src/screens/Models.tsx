@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { importModels, listModels, removeModel, addWatchedFolder, listWatchedFolders, setModelPreload, setModelPinned } from "@/lib/ipc";
 import { strings } from "@/lib/strings";
 import type { ModelEntry, Compatibility, ModelAvailability, WatchedFolder } from "@/lib/types";
@@ -75,23 +76,31 @@ export function ModelsScreen() {
     loadModels();
   }, []);
 
-  const handleImportFiles = async (files: FileList) => {
-    if (!files || files.length === 0) return;
-    const paths: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const webkitRelativePath = (f as any).webkitRelativePath;
-      paths.push(webkitRelativePath || f.name);
-    }
-    if (paths.length === 0) return;
-
-    setImporting(true);
+  const handleImportFiles = async () => {
+    alert("handleImportFiles called");
     try {
-      await importModels(paths);
-      await loadModels();
-      setPresetChanged(true);
-    } finally {
-      setImporting(false);
+      console.log("Opening file dialog...");
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: "GGUF models", extensions: ["gguf"] }],
+      });
+      console.log("Dialog result:", selected);
+      if (!selected) return;
+
+      const paths = Array.isArray(selected) ? selected : [selected];
+      console.log("Importing paths:", paths);
+
+      setImporting(true);
+      try {
+        await importModels(paths);
+        await loadModels();
+        setPresetChanged(true);
+      } finally {
+        setImporting(false);
+      }
+    } catch (e) {
+      alert(`Import error: ${e}`);
+      console.error("Import error:", e);
     }
   };
 
@@ -133,20 +142,13 @@ export function ModelsScreen() {
           <p className="text-sm text-muted-foreground">{strings.screens.models.description}</p>
         </div>
         <div className="flex gap-2">
-          <label className="cursor-pointer rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted">
-            {strings.screens.models.addModel}
-            <input
-              type="file"
-              accept=".gguf"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files) {
-                  handleImportFiles(e.target.files);
-                }
-              }}
-            />
-          </label>
+          <button
+            className="rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+            onClick={() => { console.log("button clicked"); alert("button clicked"); }}
+            disabled={importing}
+          >
+            {importing ? strings.screens.models.importing : strings.screens.models.addModel}
+          </button>
           <button
             className="rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
             onClick={() => setFolderDialog(true)}
@@ -182,20 +184,13 @@ export function ModelsScreen() {
               <h2 className="text-lg font-semibold text-foreground">{strings.screens.models.emptyTitle}</h2>
               <p className="mt-1 text-sm text-muted-foreground">{strings.screens.models.emptyBody}</p>
             </div>
-            <label className="cursor-pointer rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+            <button
+              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+              onClick={handleImportFiles}
+              disabled={importing}
+            >
               {strings.screens.models.addFirstModel}
-              <input
-                type="file"
-                accept=".gguf"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                if (e.target.files) {
-                  handleImportFiles(e.target.files);
-                }
-              }}
-              />
-            </label>
+            </button>
           </div>
         ) : (
           <div className="divide-y divide-border">

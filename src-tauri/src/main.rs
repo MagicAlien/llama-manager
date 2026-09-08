@@ -87,6 +87,7 @@ fn main() {
     tracing::info!("llama-manager starting");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ipc::probe_environment,
             ipc::check_for_updates,

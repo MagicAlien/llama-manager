@@ -22,6 +22,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use uuid::Uuid;
 use crate::core::env_probe;
 use crate::core::estimator;
 use crate::core::gh_releases;
@@ -254,31 +255,27 @@ pub async fn check_for_updates() -> Result<Vec<AvailableRelease>, AppError> {
 
 /// `docs/CONTRACTS.md` §4: `import_models | paths: Vec<String> | ImportJobId | T-031`.
 ///
-/// Queues model files for import. Returns immediately with a job ID; the
-/// frontend polls `get_import_status` for progress.
+/// Imports model files synchronously. Returns the job ID after all files
+/// have been processed.
 #[tauri::command]
 pub fn import_models(paths: Vec<String>) -> Result<ImportJobId, AppError> {
-    let job_id = ImportJobId::new();
+    let job_id: ImportJobId = Uuid::new_v4().to_string();
     let path_bufs: Vec<std::path::PathBuf> =
         paths.into_iter().map(std::path::PathBuf::from).collect();
 
-    let job_id_clone = job_id.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let _handle = std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!("failed to create tokio runtime: {e}");
-                return;
-            }
-        };
-        rt.block_on(async {
-            let result =
-                model_registry::import_models(path_bufs, job_id_clone, cancelled, None).await;
-            let _ = result;
-        });
-    });
+    let rt = tokio::runtime::Runtime::new().map_err(|e| AppError::Internal {
+        message: format!("failed to create tokio runtime: {e}"),
+    })?;
 
+    let result = rt.block_on(model_registry::import_models(
+        path_bufs,
+        job_id.clone(),
+        cancelled,
+        None,
+    ));
+
+    result?;
     Ok(job_id)
 }
 
