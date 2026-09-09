@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/ui/loading";
-import { Separator } from "@/components/ui/separator";
 import {
   activateRuntime,
   checkForUpdates,
@@ -19,8 +18,7 @@ import type {
   ServerState,
 } from "@/lib/types";
 
-const copy = strings.screens.runtime;
-const versionsCopy = copy.versions;
+const versionsCopy = strings.screens.runtime.versions;
 
 function backendLabel(backend: Backend): string {
   switch (backend.kind) {
@@ -131,25 +129,27 @@ function BuildCard({
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
         <dt className="text-muted-foreground">{versionsCopy.installPathLabel}</dt>
-        <dd className="text-foreground">{build.install_path}</dd>
+        <dd className="break-all text-foreground">{build.install_path}</dd>
         <dt className="text-muted-foreground">{versionsCopy.installedAtLabel}</dt>
         <dd className="text-foreground">{formatInstalledAt(build.installed_at)}</dd>
       </dl>
 
       {isUndetermined && (
-        <p className="rounded-md bg-warn/10 p-2 text-xs text-warn">
-          {versionsCopy.undeterminedFlag}
-        </p>
+        <div className="rounded-md bg-warn/10 p-2 text-xs text-warn">
+          <p className="font-medium">{versionsCopy.undeterminedFlag}</p>
+          <p className="mt-1">{versionsCopy.undeterminedDescription}</p>
+        </div>
       )}
 
       {latestForBackend && (
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="min-w-0 text-muted-foreground">
             {versionsCopy.currentVersion}{versionsCopy.colon} {build.build_tag} {versionsCopy.arrow} {versionsCopy.latestVersion}{versionsCopy.colon} {latestForBackend.build_tag}
           </span>
           <Button
             variant="outline"
             size="sm"
+            className="shrink-0 whitespace-nowrap"
             onClick={handleInstall}
             disabled={!canInstall}
           >
@@ -188,11 +188,21 @@ function BuildCard({
             : versionsCopy.removeButton}
         </Button>
       </div>
+
+      {isLastBuild && (
+        <p className="text-xs text-muted-foreground">{versionsCopy.lastBuildReason}</p>
+      )}
     </article>
   );
 }
 
-export function VersionManagementView() {
+// The Runtime screen's version-management section (T-024). Rendered as a
+// section — not a screen — because the Runtime route now always shows the
+// environment health section above it (9 Sept 2026 owner decision). The
+// screen's single header (title, description, Refresh) lives in
+// RuntimeScreen; this section re-fetches its data when `nonce` changes,
+// so the screen's Refresh button refreshes both sections at once.
+export function VersionManagementView({ nonce }: { nonce: number }) {
   const [builds, setBuilds] = useState<RuntimeBuild[]>([]);
   const [serverState, setServerState] = useState<ServerState>("Stopped");
   const [latestReleases, setLatestReleases] = useState<AvailableRelease[]>([]);
@@ -222,7 +232,7 @@ export function VersionManagementView() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAll();
-  }, [fetchAll]);
+  }, [fetchAll, nonce]);
 
   const handleActivate = async (build: RuntimeBuild) => {
     try {
@@ -269,7 +279,7 @@ export function VersionManagementView() {
   if (isLoading) {
     return (
       <section className="flex flex-col gap-4">
-        <h1 className="text-xl font-semibold text-foreground">{copy.title}</h1>
+        <h2 className="text-lg font-semibold text-foreground">{versionsCopy.heading}</h2>
         <Loading label={versionsCopy.loadingLabel ?? "Loading builds…"} />
       </section>
     );
@@ -277,16 +287,6 @@ export function VersionManagementView() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-foreground">{copy.title}</h1>
-          <p className="text-sm text-muted-foreground">{copy.description}</p>
-        </div>
-        <Button onClick={fetchAll}>{versionsCopy.refresh}</Button>
-      </div>
-
-      <Separator />
-
       <h2 className="text-lg font-semibold text-foreground">
         {versionsCopy.heading}
       </h2>
