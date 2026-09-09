@@ -35,6 +35,13 @@ export default {
       destructive: "#e5484d",
       "destructive-foreground": "#fdf4f4",
 
+      // The field background (text inputs). T-034's Models screen
+      // reached for `bg-input`, which never existed in this palette —
+      // the class emitted no CSS and inputs rendered as bare text on
+      // the card. Declared here so the token is the single source, per
+      // T-005's rule that components only name what this file declares.
+      input: "#0f1013",
+
       // Health-check traffic lights (docs/TASKS.md T-011). `Fail`
       // reuses `destructive` rather than duplicating red under a second
       // name. No `Warn`/`Pass` equivalent existed before this task since

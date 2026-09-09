@@ -1,27 +1,40 @@
 import { useEffect, useState } from "react";
-import { importModels, listModels, removeModel, addWatchedFolder, listWatchedFolders, setModelPreload, setModelPinned } from "@/lib/ipc";
+import { importModels, listModels, removeModel, addWatchedFolder, removeWatchedFolder, listWatchedFolders, setModelPreload, setModelPinned, rescanModels } from "@/lib/ipc";
 import { strings } from "@/lib/strings";
 import type { ModelEntry, Compatibility, ModelAvailability, WatchedFolder } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Dialog } from "@/components/ui/dialog";
 import { Loading } from "@/components/ui/loading";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-function formatSize(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+function formatSize(bytes: bigint | number): string {
+  const b = typeof bytes === "bigint" ? Number(bytes) : bytes;
+  if (b >= 1024 * 1024 * 1024) {
+    return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  if (b >= 1024 * 1024) {
+    return `${(b / (1024 * 1024)).toFixed(0)} MB`;
   }
-  return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(b / 1024).toFixed(0)} KB`;
 }
 
-function formatParamCount(count: number): string {
-  if (count >= 1000) {
-    return `${(count / 1000).toFixed(1)}k`;
+function formatParamCount(count: bigint | number | null): string {
+  if (count === null) return "?";
+  const c = typeof count === "bigint" ? Number(count) : count;
+  if (c >= 1_000_000_000) {
+    const b = c / 1_000_000_000;
+    return `${Number.isInteger(b) ? b : b.toFixed(1)}B`;
   }
-  return `${count}`;
+  if (c >= 1_000_000) {
+    const m = c / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (c >= 1_000) {
+    const k = c / 1_000;
+    return `${Number.isInteger(k) ? k : k.toFixed(1)}k`;
+  }
+  return `${c}`;
 }
 
 function compatibilityBadge(compat: Compatibility) {
@@ -58,6 +71,7 @@ export function ModelsScreen() {
   const [folderDialog, setFolderDialog] = useState(false);
   const [folderPath, setFolderPath] = useState("");
   const [presetChanged, setPresetChanged] = useState(false);
+  const [rescanning, setRescanning] = useState(false);
 
   const loadModels = async () => {
     try {
@@ -73,8 +87,7 @@ export function ModelsScreen() {
     loadModels();
   }, []);
 
-  const handleImportFiles = async (files: FileList) => {
-    const paths = Array.from(files).map((f) => f.path);
+  const handleImportFiles = async (paths: string[]) => {
     if (paths.length === 0) return;
 
     setImporting(true);
@@ -85,6 +98,16 @@ export function ModelsScreen() {
     } finally {
       setImporting(false);
     }
+  };
+
+  const pickAndImport = async () => {
+    const selected = await openDialog({
+      multiple: true,
+      filters: [{ name: strings.screens.models.ggufFilterName, extensions: ["gguf"] }],
+    });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    await handleImportFiles(paths);
   };
 
   const handleRemove = async (model: ModelEntry) => {
@@ -98,14 +121,47 @@ export function ModelsScreen() {
   };
 
   const handleAddFolder = async () => {
-    if (!folderPath.trim()) return;
+    // Prefer the native folder picker; the typed path is the fallback.
+    const picked = folderPath.trim()
+      ? folderPath.trim()
+      : ((await openDialog({ directory: true })) ?? "");
+    if (!picked) return;
     try {
-      await addWatchedFolder(folderPath.trim());
+      await addWatchedFolder(picked);
       await loadModels();
       setFolderDialog(false);
       setFolderPath("");
+      setPresetChanged(true);
     } catch {
-      // Error handling could be added here
+      // The IPC error surfaces via the rejected promise; the folder dialog
+      // stays open so the user can retry with a different path.
+    }
+  };
+
+  const pickFolder = async () => {
+    const picked = await openDialog({ directory: true });
+    if (picked) setFolderPath(picked);
+  };
+
+  const handleRescan = async () => {
+    setRescanning(true);
+    try {
+      await rescanModels();
+      await loadModels();
+    } finally {
+      setRescanning(false);
+    }
+  };
+
+  const handleRemoveFolder = async (path: string) => {
+    try {
+      await removeWatchedFolder(path);
+      await loadModels();
+      setPresetChanged(true);
+    } catch {
+      // Rejected promise keeps the folder in the list; the user sees no
+      // change rather than a row that disappeared server-side but not
+      // client-side.
     }
   };
 
@@ -121,34 +177,37 @@ export function ModelsScreen() {
     <div className="flex h-full flex-col gap-4">
       <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{strings.screens.models.title}</h1>
+          <h1 className="text-xl font-bold text-foreground">{strings.screens.models.title}</h1>
           <p className="text-sm text-muted-foreground">{strings.screens.models.description}</p>
         </div>
         <div className="flex gap-2">
-          <label className="cursor-pointer rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted">
-            {strings.screens.models.addModel}
-            <input
-              type="file"
-              accept=".gguf"
-              multiple
-              className="hidden"
-              onChange={(e) => handleImportFiles(e.target.files)}
-            />
-          </label>
           <button
-            className="rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-muted"
+            className="cursor-pointer rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground hover:bg-surface-hover"
+            onClick={pickAndImport}
+          >
+            {strings.screens.models.addModel}
+          </button>
+          <button
+            className="rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground hover:bg-surface-hover"
             onClick={() => setFolderDialog(true)}
           >
             {strings.screens.models.addFolder}
+          </button>
+          <button
+            className="cursor-pointer rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground hover:bg-surface-hover"
+            onClick={handleRescan}
+            disabled={rescanning}
+          >
+            {rescanning ? strings.screens.models.rescanning : strings.screens.models.rescan}
           </button>
         </div>
       </header>
 
       {presetChanged && (
-        <div className="flex items-center gap-2 rounded-md border border-amber-900 bg-amber-950/30 px-4 py-2 text-sm text-amber-300">
+        <div className="flex items-center gap-2 rounded-md border border-warn bg-warn/10 px-4 py-2 text-sm text-warn">
           <span>{strings.screens.models.presetChanged}</span>
           <button
-            className="ml-2 underline hover:text-amber-200"
+            className="ml-2 underline hover:text-foreground"
             onClick={() => setPresetChanged(false)}
           >
             {strings.screens.models.dismiss}
@@ -157,29 +216,25 @@ export function ModelsScreen() {
       )}
 
       {importing && (
-        <div className="flex items-center gap-2 rounded-md border border-sky-900 bg-sky-950/30 px-4 py-2 text-sm text-sky-300">
+        <div className="flex items-center gap-2 rounded-md border border-accent bg-accent/10 px-4 py-2 text-sm text-accent">
           <Loading label={strings.screens.models.importing} size="sm" />
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto rounded-lg border border-border bg-card">
+      <div className="flex-1 overflow-y-auto rounded-lg border border-border bg-surface">
         {models.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-4 p-12 text-center">
-            <div className="text-6xl text-muted-foreground">{strings.screens.models.emptyIcon}</div>
+            <div className="text-xl text-muted-foreground">{strings.screens.models.emptyIcon}</div>
             <div>
               <h2 className="text-lg font-semibold text-foreground">{strings.screens.models.emptyTitle}</h2>
               <p className="mt-1 text-sm text-muted-foreground">{strings.screens.models.emptyBody}</p>
             </div>
-            <label className="cursor-pointer rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+            <button
+              className="cursor-pointer rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover"
+              onClick={pickAndImport}
+            >
               {strings.screens.models.addFirstModel}
-              <input
-                type="file"
-                accept=".gguf"
-                multiple
-                className="hidden"
-                onChange={(e) => handleImportFiles(e.target.files)}
-              />
-            </label>
+            </button>
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -207,7 +262,7 @@ export function ModelsScreen() {
                     )}
                   </div>
                   {model.availability === "Missing" && (
-                    <div className="mt-1 text-xs text-red-400">{model.file_path}</div>
+                    <div className="mt-1 text-xs text-destructive">{model.file_path}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-4">
@@ -234,7 +289,7 @@ export function ModelsScreen() {
                     {strings.screens.models.pinned}
                   </label>
                   <button
-                    className="rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+                    className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
                     onClick={() => setRemoveDialog(model)}
                   >
                     {strings.screens.models.remove}
@@ -247,13 +302,21 @@ export function ModelsScreen() {
       </div>
 
       {watchedFolders.length > 0 && (
-        <div className="rounded-lg border border-border bg-card p-4">
+        <div className="rounded-lg border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold text-foreground">{strings.screens.models.watchedFolders}</h2>
           <div className="mt-2 space-y-1">
             {watchedFolders.map((folder) => (
-              <div key={folder.id} className="flex items-center justify-between text-sm text-muted-foreground">
+              <div key={folder.path} className="flex items-center justify-between text-sm text-muted-foreground">
                 <span>{folder.path}</span>
-                <span className="text-xs">{folder.model_count} {strings.screens.models.modelsCount}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs">{folder.model_count} {strings.screens.models.modelsCount}</span>
+                  <button
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => handleRemoveFolder(folder.path)}
+                  >
+                    {strings.screens.models.removeFolder}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -271,18 +334,18 @@ export function ModelsScreen() {
               {strings.screens.models.removeBody}
             </p>
             <p className="text-sm font-medium text-foreground">{removeDialog.display_name}</p>
-            <div className="rounded-md border border-amber-900 bg-amber-950/30 p-3 text-xs text-amber-300">
+            <div className="rounded-md border border-warn bg-warn/10 p-3 text-xs text-warn">
               {strings.screens.models.removeRetention}
             </div>
             <div className="flex justify-end gap-2">
               <button
-                className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-muted"
+                className="rounded-md border border-border bg-surface px-4 py-2 text-sm text-foreground hover:bg-surface-hover"
                 onClick={() => setRemoveDialog(null)}
               >
                 {strings.screens.models.cancel}
               </button>
               <button
-                className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                className="rounded-md bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground hover:bg-destructive/80"
                 onClick={() => handleRemove(removeDialog)}
               >
                 {strings.screens.models.confirmRemove}
@@ -303,20 +366,26 @@ export function ModelsScreen() {
           </p>
           <input
             type="text"
-            className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm text-foreground"
+            className="w-full rounded-md border border-border bg-input px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
             placeholder={strings.screens.models.folderPathPlaceholder}
             value={folderPath}
             onChange={(e) => setFolderPath(e.target.value)}
           />
           <div className="flex justify-end gap-2">
             <button
-              className="rounded-md border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-muted"
+              className="mr-auto rounded-md border border-border bg-surface px-4 py-2 text-sm text-foreground hover:bg-surface-hover"
+              onClick={pickFolder}
+            >
+              {strings.screens.models.browseFolder}
+            </button>
+            <button
+              className="rounded-md border border-border bg-surface px-4 py-2 text-sm text-foreground hover:bg-surface-hover"
               onClick={() => setFolderDialog(false)}
             >
               {strings.screens.models.cancel}
             </button>
             <button
-              className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+              className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover"
               onClick={handleAddFolder}
             >
               {strings.screens.models.addFolderBtn}

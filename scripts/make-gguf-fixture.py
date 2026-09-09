@@ -34,6 +34,17 @@ import sys
 GGUF_MAGIC = 0x46554747  # "GGUF"
 GGUF_VERSION = 3
 
+# llama.cpp FTYPE enum (general.file_type) → the label gguf.rs's
+# ftype_label() maps back. Keep in sync with that table.
+FTYPE_CODES = {
+    "F32": 0, "F16": 1, "Q4_0": 2, "Q4_1": 3, "Q8_0": 7,
+    "Q5_0": 8, "Q5_1": 9, "Q2_K": 10, "Q3_K_S": 11, "Q3_K_M": 12,
+    "Q3_K_L": 13, "Q4_K_S": 14, "Q4_K_M": 15, "Q5_K_S": 16, "Q5_K_M": 17,
+    "Q6_K": 18, "IQ2_XXS": 19, "IQ2_XS": 20, "Q2_K_S": 21, "IQ3_XXS": 22,
+    "IQ1_S": 23, "IQ4_NL": 24, "IQ3_S": 25, "IQ2_S": 26, "IQ4_XS": 27,
+    "MXFP4": 28, "NVFP4": 32,
+}
+
 
 def write_u8(f, v):
     f.write(struct.pack('<B', v))
@@ -87,19 +98,19 @@ def write_string(f, s):
 
 def write_kv_string(f, key, value):
     write_string(f, key)
-    write_u32(f, 11)  # GGUF_TYPE_STRING
+    write_u32(f, 8)  # GGUF_TYPE_STRING (GGUF v3 spec: u8=0..bool=7, string=8, array=9, u64=10, i64=11, f64=12)
     write_string(f, value)
 
 
 def write_kv_uint32(f, key, value):
     write_string(f, key)
-    write_u32(f, 6)  # GGUF_TYPE_UINT32
+    write_u32(f, 4)  # GGUF_TYPE_UINT32
     write_u32(f, value)
 
 
 def write_kv_uint64(f, key, value):
     write_string(f, key)
-    write_u32(f, 7)  # GGUF_TYPE_UINT64
+    write_u32(f, 10)  # GGUF_TYPE_UINT64
     write_u64(f, value)
 
 
@@ -165,7 +176,7 @@ def _write_gguf_content(f, args, arch, base_name, shard_idx, shard_total):
     write_u64(f, tensor_count)
 
     # KV pair count — calculate based on architecture
-    kv_count = 4  # general: architecture, name, parameters, quantization_version
+    kv_count = 4  # general: architecture, name, parameters, file_type
     if args.chat_template:
         kv_count += 1
     if args.moe:
@@ -182,7 +193,10 @@ def _write_gguf_content(f, args, arch, base_name, shard_idx, shard_total):
     write_kv_string(f, "general.architecture", arch)
     write_kv_string(f, "general.name", f"{base_name}-{args.params}")
     write_kv_string(f, "general.parameters", args.params)
-    write_kv_string(f, "general.quantization_version", args.quant)
+    # The human quant label rides in general.file_type (llama.cpp's FTYPE
+    # enum) — general.quantization_version is the encoding spec version
+    # (always 2), not a label. Reverse of ftype_label() in gguf.rs.
+    write_kv_uint32(f, "general.file_type", FTYPE_CODES.get(args.quant, 0))
 
     # Architecture-specific
     if arch in ("llama", "mistral", "qwen", "qwen3", "mixtral", "deepseek2"):

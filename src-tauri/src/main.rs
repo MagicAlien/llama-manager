@@ -87,6 +87,7 @@ fn main() {
     tracing::info!("llama-manager starting");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ipc::probe_environment,
             ipc::check_for_updates,
@@ -98,10 +99,15 @@ fn main() {
             ipc::get_server_state,
             ipc::import_models,
             ipc::get_import_status,
+            ipc::cancel_import,
             ipc::list_models,
             ipc::remove_model,
+            ipc::set_model_preload,
+            ipc::set_model_pinned,
             ipc::add_watched_folder,
+            ipc::remove_watched_folder,
             ipc::list_watched_folders,
+            ipc::rescan_models,
             ipc::estimate_vram,
             ipc::preview_preset
         ])

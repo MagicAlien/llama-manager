@@ -215,6 +215,8 @@ What ships in v1:
 - **The estimator models the NVFP4 memory profile.** Memory saving follows from the format, not from kernel dispatch, so it is modelled like any other quantization — with a note that the figure is unvalidated.
 - The UI never asserts that NVFP4 acceleration is active.
 
+**Quantization label is header-faithful.** The reader derives the label from the header's `general.file_type` (`ftype_label`). For mixed-quantization writers (e.g., unsloth NVFP4), that field encodes the non-backbone tensors' quantization (Q8_0 attention + lm_head) rather than the backbone's (NVFP4), so the label is faithful to the header but does not identify the backbone's quantization. Owner's decision (9 Sept 2026, PROGRESS.md D-013): keep the header-faithful label; do not guess from the filename or `description`. A future task may find a better derivation (per-tensor types, or a writer-specific metadata key).
+
 Promoting NVFP4 to plain `Supported`, with a real capability probe behind it, is a v1.1 item (§8). The probe most likely reads the server's startup output or `/props` rather than the flag list; that is an empirical question for `docs/owner-verification.md`.
 
 ### 2.7 The app owns the endpoint

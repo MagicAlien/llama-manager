@@ -40,9 +40,11 @@ vi.mock("@/lib/ipc", () => ({
   importModels: vi.fn().mockResolvedValue("job-1"),
   removeModel: vi.fn().mockResolvedValue(undefined),
   addWatchedFolder: vi.fn().mockResolvedValue([]),
+  removeWatchedFolder: vi.fn().mockResolvedValue(undefined),
   previewPreset: vi.fn().mockResolvedValue(""),
   setModelPreload: vi.fn().mockResolvedValue({}),
   setModelPinned: vi.fn().mockResolvedValue({}),
+  rescanModels: vi.fn().mockResolvedValue([]),
 }));
 
 afterEach(() => {

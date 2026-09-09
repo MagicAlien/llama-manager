@@ -193,6 +193,21 @@ pub fn list_models(conn: &rusqlite::Connection) -> Result<Vec<ModelRow>, AppErro
     rows.into_iter().map(model_row_to_struct).collect()
 }
 
+/// The catalogue entry for an absolute model path, if one exists. Model
+/// identity is the path (`PLAN.md` §2.13) — this is the lookup the import
+/// upsert and the re-import-retains-settings behaviour both key on.
+pub fn find_model_by_path(
+    conn: &rusqlite::Connection,
+    file_path: &str,
+) -> Result<Option<ModelRow>, AppError> {
+    let sql = format!("SELECT {MODEL_COLUMNS} FROM models WHERE file_path = ?1");
+    let found = conn
+        .query_row(&sql, params![file_path], model_from_row)
+        .optional()
+        .map_err(db_err)?;
+    found.map(model_row_to_struct).transpose()
+}
+
 /// The mutable half of a model's catalogue entry a user actually toggles
 /// day to day. Other columns (`display_name`, `metadata_json`, ...) belong
 /// to whichever later task re-imports or re-scans the file.

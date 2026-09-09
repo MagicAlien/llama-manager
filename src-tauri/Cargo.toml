@@ -68,6 +68,14 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "r
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros"] }
+# T-034 follow-up (Models screen): the webview's <input type="file"> cannot
+# expose an absolute filesystem path — a Tauri webview is not Electron, and
+# the File object carries only name/size, so every import arrived at the
+# backend as a bare filename and failed with NotFound. The native dialog
+# plugin returns real absolute paths. Justified per AGENTS.md §4 (not on
+# PLAN.md §3's approved list; no std/tauri-core alternative for a native
+# file picker) — see this PR's Dependencies section.
+tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
