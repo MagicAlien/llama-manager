@@ -3,22 +3,32 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 
 import App from "@/App";
 import { strings } from "@/lib/strings";
-import type { EnvironmentReport, HealthCheck } from "@/lib/types";
+import type { EnvironmentReport, HealthCheck, RuntimeBuild } from "@/lib/types";
 
-// Mocks only `probeEnvironment`; every other `src/lib/ipc.ts` export
-// passes through untouched, so a future screen that also imports from
-// this module is unaffected by this file's mock.
+// Mocks the `@/lib/ipc` surface this screen (and its always-rendered
+// version-management section) touches: `probeEnvironment` (T-011) and the
+// three version-management data calls (T-024). `VersionManagementView` now
+// always renders below the health section (9 Sept 2026 owner decision), so
+// its data calls must not reach the real Tauri `invoke` in jsdom. Defaults
+// resolve to an empty catalogue / Stopped server / no releases; tests that
+// need builds override with `mockResolvedValueOnce`. Every other
+// `src/lib/ipc.ts` export passes through untouched, so a future screen that
+// also imports from this module is unaffected by this file's mock.
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
   return {
     ...actual,
     probeEnvironment: vi.fn(),
+    listRuntimes: vi.fn().mockResolvedValue([]),
+    getServerState: vi.fn().mockResolvedValue("Stopped"),
+    checkForUpdates: vi.fn().mockResolvedValue([]),
   };
 });
 
-import { probeEnvironment } from "@/lib/ipc";
+import { listRuntimes, probeEnvironment } from "@/lib/ipc";
 
 const mockedProbeEnvironment = vi.mocked(probeEnvironment);
+const mockedListRuntimes = vi.mocked(listRuntimes);
 
 const healthCopy = strings.screens.runtime.healthCheck;
 
@@ -246,5 +256,90 @@ describe("RuntimeScreen — health checks (docs/TASKS.md T-011)", () => {
 
     await waitFor(() => expect(mockedProbeEnvironment).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("No NVIDIA GPU was detected.")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Runtime screen layout (9 Sept 2026 owner decision): both sections are
+// ALWAYS shown — not mutually exclusive views. The version-management
+// section sits first (its empty state is the first-run call to action);
+// the environment health section sits below it. The four tests above prove
+// the health section's content; these prove the layout itself.
+// ---------------------------------------------------------------------------
+
+const versionsCopy = strings.screens.runtime.versions;
+
+function buildFixture(overrides: Partial<RuntimeBuild> = {}): RuntimeBuild {
+  return {
+    build_tag: "b10867",
+    backend: { kind: "Cpu" },
+    install_path: "C:/Users/Alieno/AppData/Local/LlamaManager/runtimes/b10867-cpu",
+    is_active: false,
+    installed_at: "2026-09-08T21:45:00Z",
+    verified_flags: [],
+    health_endpoint: "/props",
+    registration_channel: "PresetDeclaresPath",
+    ...overrides,
+  };
+}
+
+describe("Runtime screen layout (health always visible, 9 Sept 2026)", () => {
+  it("shows the environment health section even when a build is installed", async () => {
+    mockedProbeEnvironment.mockResolvedValueOnce(blackwellReport);
+    mockedListRuntimes.mockResolvedValueOnce([buildFixture()]);
+
+    render(<App />);
+    goToRuntime();
+
+    // Health section present (T-011 content) AND version-management section
+    // present (T-024 heading) — both on the same screen, not mutually
+    // exclusive views.
+    await screen.findByText(healthCopy.heading);
+    expect(screen.getByText("GPU detected")).toBeTruthy();
+    expect(screen.getByText(versionsCopy.heading)).toBeTruthy();
+    expect(screen.getByText("b10867")).toBeTruthy();
+  });
+
+  it("shows the version-management empty state when no build is installed", async () => {
+    mockedProbeEnvironment.mockResolvedValueOnce(blackwellReport);
+
+    render(<App />);
+    goToRuntime();
+
+    await screen.findByText(healthCopy.heading);
+    expect(screen.getByText(versionsCopy.heading)).toBeTruthy();
+    expect(screen.getByText(versionsCopy.empty)).toBeTruthy();
+  });
+
+  it("explains why the last remaining build cannot be removed", async () => {
+    mockedProbeEnvironment.mockResolvedValueOnce(blackwellReport);
+    mockedListRuntimes.mockResolvedValueOnce([buildFixture()]);
+
+    render(<App />);
+    goToRuntime();
+
+    await screen.findByText(versionsCopy.heading);
+    // The Remove button is disabled (it is the last build) and the reason is
+    // displayed — T-024: "rejected ... with the reason displayed".
+    const removeButton = screen.getByRole("button", {
+      name: versionsCopy.removeButton,
+    }) as HTMLButtonElement;
+    expect(removeButton.disabled).toBe(true);
+    expect(screen.getByText(versionsCopy.lastBuildReason)).toBeTruthy();
+  });
+
+  it("explains that an Undetermined registration channel blocks model loading", async () => {
+    mockedProbeEnvironment.mockResolvedValueOnce(blackwellReport);
+    mockedListRuntimes.mockResolvedValueOnce([
+      buildFixture({ registration_channel: "Undetermined" }),
+    ]);
+
+    render(<App />);
+    goToRuntime();
+
+    await screen.findByText(versionsCopy.heading);
+    // The jargon-free flag and its explanation, not the internal T-025 note.
+    expect(screen.getByText(versionsCopy.undeterminedFlag)).toBeTruthy();
+    expect(screen.getByText(versionsCopy.undeterminedDescription)).toBeTruthy();
   });
 });
