@@ -34,7 +34,7 @@ Next candidate: T-035 (Model detail screen). T-006 remains `Blocked` on D-005.
 
 ## In progress
 
-*9 Sept 2026 — on `fix/build-errors` (still uncommitted): (1) the design-system class fix from the 8 Sept second pass (Models.tsx/Badge/Switch/Dialog onto declared tokens, `input` token added); (2) the `? params` fix — real unsloth GGUF headers carry the count in `general.size_label` ("27B") and have no `general.parameters` key, so `gguf.rs` now falls back to the size label and `formatParamCount` renders B/M tiers (27B, not "27000000.0k"); (3) D-013 recorded: the header's `file_type` does not declare the backbone quantization for mixed-quantization writers — owner decision: keep the header-faithful label, future task may find a better derivation. Next session: commit, push, PR, owner-approval merge. T-006 remains `Blocked` on D-005.*
+*9 Sept 2026 — on `fix/build-errors`, committed as `9292fe0` and pushed; **PR #27 open** (consolidated fix stack: T-031 registry wiring, T-034 follow-up, design-system repair, GGUF metadata, D-013). Awaiting owner-approval merge — move to `Done` only after the merge. (1) the design-system class fix from the 8 Sept second pass (Models.tsx/Badge/Switch/Dialog onto declared tokens, `input` token added); (2) the `? params` fix — real unsloth GGUF headers carry the count in `general.size_label` ("27B") and have no `general.parameters` key, so `gguf.rs` now falls back to the size label and `formatParamCount` renders B/M tiers (27B, not "27000000.0k"); (3) D-013 recorded: the header's `file_type` does not declare the backbone quantization for mixed-quantization writers — owner decision: keep the header-faithful label, future task may find a better derivation. T-006 remains `Blocked` on D-005.*
 
 ---
 
