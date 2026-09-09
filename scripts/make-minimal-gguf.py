@@ -29,12 +29,12 @@ def write_gguf_header(path, name="llama-test"):
         # Reserve space for the KV count (we'll patch it)
         f.write(struct.pack("<Q", 1))  # 1 KV pair
 
-        # KV pair: key "general.name", type string (3)
+        # KV pair: key "general.name", type string (8 per the GGUF v3 spec)
         # Write key string
         f.write(struct.pack("<Q", len("general.name")))
         f.write("general.name".encode("utf-8"))
         # Write value string
-        f.write(struct.pack("<I", 3))  # type: string
+        f.write(struct.pack("<I", 8))  # type: string
         f.write(struct.pack("<Q", len(name)))
         f.write(name.encode("utf-8"))
 

@@ -123,7 +123,7 @@ function BuildCard({
           </p>
         </div>
         {build.is_active && (
-          <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground">
+          <span className="shrink-0 rounded-full bg-accent px-2 py-1 text-xs font-medium text-accent-foreground">
             {versionsCopy.activeBadge}
           </span>
         )}
@@ -137,7 +137,7 @@ function BuildCard({
       </dl>
 
       {isUndetermined && (
-        <p className="rounded-md bg-amber-100 p-2 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+        <p className="rounded-md bg-warn/10 p-2 text-xs text-warn">
           {versionsCopy.undeterminedFlag}
         </p>
       )}
@@ -292,7 +292,7 @@ export function VersionManagementView() {
       </h2>
 
       {isServerRunning && (
-        <p className="rounded-md bg-amber-100 p-2 text-xs text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+        <p className="rounded-md bg-warn/10 p-2 text-xs text-warn">
           {versionsCopy.notStoppedReason}
         </p>
       )}
@@ -301,8 +301,8 @@ export function VersionManagementView() {
         <p
           className={`rounded-md p-2 text-xs ${
             message.type === "success"
-              ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-              : "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+              ? "bg-pass/10 text-pass"
+              : "bg-destructive/10 text-destructive"
           }`}
         >
           {message.text}

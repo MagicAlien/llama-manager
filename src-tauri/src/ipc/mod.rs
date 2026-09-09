@@ -254,32 +254,37 @@ pub async fn check_for_updates() -> Result<Vec<AvailableRelease>, AppError> {
 
 /// `docs/CONTRACTS.md` §4: `import_models | paths: Vec<String> | ImportJobId | T-031`.
 ///
-/// Queues model files for import. Returns immediately with a job ID; the
-/// frontend polls `get_import_status` for progress.
+/// Import and AWAIT the result. The command used to return the job id
+/// immediately while a background thread did the work — the frontend's
+/// `loadModels()` then raced the import and read an empty catalogue
+/// (observed 8 Sept 2026: the row landed in the DB ~14 ms after the UI
+/// had already refreshed to "No models imported yet"). The import is
+/// human-scale file I/O on explicitly user-picked paths; awaiting it
+/// here is the honest contract, and `get_import_status` remains for
+/// longer-lived progress reporting.
 #[tauri::command]
-pub fn import_models(paths: Vec<String>) -> Result<ImportJobId, AppError> {
+pub async fn import_models(paths: Vec<String>) -> Result<ImportJobId, AppError> {
     let job_id = ImportJobId::new();
     let path_bufs: Vec<std::path::PathBuf> =
         paths.into_iter().map(std::path::PathBuf::from).collect();
 
-    let job_id_clone = job_id.clone();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let _handle = std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                tracing::error!("failed to create tokio runtime: {e}");
-                return;
-            }
-        };
-        rt.block_on(async {
-            let result =
-                model_registry::import_models(path_bufs, job_id_clone, cancelled, None).await;
-            let _ = result;
-        });
-    });
+    // Register the job so cancel_import(jobId) can reach the flag while the
+    // command is awaited; the guard unregisters on return either way.
+    let _guard = model_registry::register_import_job(&job_id, &cancelled);
+    let result = model_registry::import_models(path_bufs, job_id.clone(), cancelled, None).await?;
+    // Surface a failed job as a rejected command so the frontend can
+    // distinguish success from failure (the Finished/Cancelled event the
+    // result carries is still the progress record).
+    tracing::info!(job_id = %job_id, ?result, "import_models done");
 
     Ok(job_id)
+}
+
+/// `docs/CONTRACTS.md` §4: `cancel_import | job_id: String | () | T-031`.
+#[tauri::command]
+pub fn cancel_import(job_id: String) -> Result<(), AppError> {
+    model_registry::cancel_import(&job_id)
 }
 
 /// `docs/CONTRACTS.md` §4: `get_import_status | job_id: String | ImportProgress | T-031`.
@@ -307,19 +312,37 @@ pub fn list_models() -> Result<Vec<ModelEntry>, AppError> {
 
 /// `docs/CONTRACTS.md` §4: `remove_model | id: String | () | T-031`.
 ///
-/// Removes a model from the catalogue, retaining its settings.
+/// Removes a model from the catalogue, retaining its settings by path.
 #[tauri::command]
 pub fn remove_model(id: String) -> Result<(), AppError> {
     model_registry::remove_model(&id)
 }
 
-/// `docs/CONTRACTS.md` §4: `add_watched_folder | path: String | WatchedFolder | T-031`.
-///
-/// Adds a directory to watch for new models.
+/// `docs/CONTRACTS.md` §4: `set_model_preload | id: String, preload: bool | ModelEntry | T-031`.
 #[tauri::command]
-pub fn add_watched_folder(path: String) -> Result<WatchedFolder, AppError> {
+pub fn set_model_preload(id: String, preload: bool) -> Result<ModelEntry, AppError> {
+    model_registry::set_model_preload(&id, preload)
+}
+
+/// `docs/CONTRACTS.md` §4: `set_model_pinned | id: String, pinned: bool | ModelEntry | T-031`.
+#[tauri::command]
+pub fn set_model_pinned(id: String, pinned: bool) -> Result<ModelEntry, AppError> {
+    model_registry::set_model_pinned(&id, pinned)
+}
+
+/// `docs/CONTRACTS.md` §4: `add_watched_folder | path: String | Vec<ModelEntry> | T-031`.
+///
+/// Adds a directory to watch for new models AND registers what it contains.
+#[tauri::command]
+pub async fn add_watched_folder(path: String) -> Result<Vec<ModelEntry>, AppError> {
     let path_buf = std::path::PathBuf::from(path);
-    model_registry::add_watched_folder(&path_buf)
+    model_registry::add_watched_folder(&path_buf).await
+}
+
+/// `docs/CONTRACTS.md` §4: `rescan_models | — | Vec<ModelEntry> | T-031`.
+#[tauri::command]
+pub async fn rescan_models() -> Result<Vec<ModelEntry>, AppError> {
+    model_registry::rescan_models().await
 }
 
 /// `docs/CONTRACTS.md` §4: `list_watched_folders | — | Vec<WatchedFolder> | T-031`.
@@ -328,6 +351,15 @@ pub fn add_watched_folder(path: String) -> Result<WatchedFolder, AppError> {
 #[tauri::command]
 pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
     model_registry::list_watched_folders()
+}
+
+/// `docs/CONTRACTS.md` §4: `remove_watched_folder | path: String | () | T-031`.
+///
+/// Unwatches a folder and unregisters the models inside it; files on disk
+/// are never touched.
+#[tauri::command]
+pub fn remove_watched_folder(path: String) -> Result<(), AppError> {
+    model_registry::remove_watched_folder(&path)
 }
 
 /// `docs/CONTRACTS.md` §4: `estimate_vram | id: String, LaunchParams | VramEstimate | T-032`.

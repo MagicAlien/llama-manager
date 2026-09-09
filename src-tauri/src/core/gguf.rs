@@ -23,12 +23,58 @@ const MAX_TENSOR_COUNT: u64 = 1_000_000;
 /// Maximum reasonable KV pair count.
 const MAX_KV_COUNT: u64 = 100_000;
 
+/// Map llama.cpp's `general.file_type` (FTYPE enum) to the human quant
+/// label. Values beyond the enum (writer-specific) become None → "unknown".
+fn ftype_label(v: u32) -> String {
+    let label = match v {
+        0 => "F32",
+        1 => "F16",
+        2 => "Q4_0",
+        3 => "Q4_1",
+        7 => "Q8_0",
+        8 => "Q5_0",
+        9 => "Q5_1",
+        10 => "Q2_K",
+        11 => "Q3_K_S",
+        12 => "Q3_K_M",
+        13 => "Q3_K_L",
+        14 => "Q4_K_S",
+        15 => "Q4_K_M",
+        16 => "Q5_K_S",
+        17 => "Q5_K_M",
+        18 => "Q6_K",
+        19 => "IQ2_XXS",
+        20 => "IQ2_XS",
+        21 => "Q2_K_S",
+        22 => "IQ3_XXS",
+        23 => "IQ1_S",
+        24 => "IQ4_NL",
+        25 => "IQ3_S",
+        26 => "IQ2_S",
+        27 => "IQ4_XS",
+        28 => "MXFP4",
+        32 => "NVFP4",
+        _ => "unknown",
+    };
+    label.to_string()
+}
+
 /// Architecture-specific layer count key.
-fn layer_count_key(arch: &str) -> &str {
+/// The KV key carrying the block (layer) count for an architecture. The
+/// GGUF convention prefixes every per-arch key with the architecture
+/// string itself: `llama.block_count`, `qwen35.block_count`, ... — llama.cpp
+/// reads `<arch>.block_count` generically, never a fixed `llama.` prefix.
+/// The table below exists only for the (none, today) archs that deviate;
+/// everything else uses the arch-prefixed key. The old fallback returned
+/// `llama.block_count` for unknown archs, so a real Qwen3-35B
+/// (`general.architecture = qwen35`) parsed with block_count = 0.
+fn layer_count_key(arch: &str) -> String {
     match arch {
         "llama" | "mistral" | "qwen" | "qwen3" | "gemma" | "gemma2" | "phi" | "phi3"
-        | "mixtral" | "deepseek2" | "llama4" | "smollm" | "stablelm" => "llama.block_count",
-        _ => "llama.block_count",
+        | "mixtral" | "deepseek2" | "llama4" | "smollm" | "stablelm" => {
+            format!("{arch}.block_count")
+        }
+        other => format!("{other}.block_count"),
     }
 }
 
@@ -123,39 +169,49 @@ fn read_gguf_string<R: Read>(reader: &mut R) -> Result<String, AppError> {
 }
 
 /// GGUF metadata value type.
+///
+/// The discriminants are the GGUF v3 spec's own wire values (ggml-org/gguf,
+/// `enum GGUFMetadataValueType`): u8=0, i8=1, u16=2, i16=3, u32=4, i32=5,
+/// f32=6, bool=7, string=8, array=9, u64=10, i64=11, f64=12. The original
+/// T-030 enum carried a shifted order (String=11, Array=12, Float32=8,
+/// ...) which parsed the synthetic 63-byte fixtures written the same wrong
+/// way, and failed on EVERY real llama.cpp-written file with
+/// `string too long` — type 8 (string) was consumed as a 4-byte float,
+/// desynchronising the reader. Fixed after importing a real
+/// Qwen3-27B-NVFP4 GGUF failed (8 Sept 2026, log evidence).
 #[derive(Debug, Clone, Copy)]
 enum GgufValueType {
-    Int8 = 0,
-    Int16 = 1,
-    Int32 = 2,
-    Int64 = 3,
-    UInt8 = 4,
-    UInt16 = 5,
-    UInt32 = 6,
-    UInt64 = 7,
-    Float32 = 8,
-    Float64 = 9,
-    Bool = 10,
-    String = 11,
-    Array = 12,
+    UInt8 = 0,
+    Int8 = 1,
+    UInt16 = 2,
+    Int16 = 3,
+    UInt32 = 4,
+    Int32 = 5,
+    Float32 = 6,
+    Bool = 7,
+    String = 8,
+    Array = 9,
+    UInt64 = 10,
+    Int64 = 11,
+    Float64 = 12,
 }
 
 impl GgufValueType {
     fn from_u32(v: u32) -> Result<Self, AppError> {
         match v {
-            0 => Ok(GgufValueType::Int8),
-            1 => Ok(GgufValueType::Int16),
-            2 => Ok(GgufValueType::Int32),
-            3 => Ok(GgufValueType::Int64),
-            4 => Ok(GgufValueType::UInt8),
-            5 => Ok(GgufValueType::UInt16),
-            6 => Ok(GgufValueType::UInt32),
-            7 => Ok(GgufValueType::UInt64),
-            8 => Ok(GgufValueType::Float32),
-            9 => Ok(GgufValueType::Float64),
-            10 => Ok(GgufValueType::Bool),
-            11 => Ok(GgufValueType::String),
-            12 => Ok(GgufValueType::Array),
+            0 => Ok(GgufValueType::UInt8),
+            1 => Ok(GgufValueType::Int8),
+            2 => Ok(GgufValueType::UInt16),
+            3 => Ok(GgufValueType::Int16),
+            4 => Ok(GgufValueType::UInt32),
+            5 => Ok(GgufValueType::Int32),
+            6 => Ok(GgufValueType::Float32),
+            7 => Ok(GgufValueType::Bool),
+            8 => Ok(GgufValueType::String),
+            9 => Ok(GgufValueType::Array),
+            10 => Ok(GgufValueType::UInt64),
+            11 => Ok(GgufValueType::Int64),
+            12 => Ok(GgufValueType::Float64),
             _ => Err(AppError::GgufParse {
                 message: format!("unknown GGUF value type: {v}"),
             }),
@@ -219,10 +275,7 @@ fn skip_value<R: Read + Seek>(reader: &mut R, vtype: GgufValueType) -> Result<()
                     message: format!("failed to skip value: {e}"),
                 })?;
         }
-        GgufValueType::Int32
-        | GgufValueType::UInt32
-        | GgufValueType::Float32
-        | GgufValueType::Array => {
+        GgufValueType::Int32 | GgufValueType::UInt32 | GgufValueType::Float32 => {
             reader
                 .seek(SeekFrom::Current(4))
                 .map_err(|e| AppError::GgufParse {
@@ -243,6 +296,23 @@ fn skip_value<R: Read + Seek>(reader: &mut R, vtype: GgufValueType) -> Result<()
                 .map_err(|e| AppError::GgufParse {
                     message: format!("failed to skip string: {e}"),
                 })?;
+        }
+        // A nested array carries its own element type + count on the wire
+        // (type u32, count u64, then the elements) — it is not a 4-byte
+        // scalar. The old enum mapped Array to the Int32 arm's 4-byte skip,
+        // which desynchronised any reader that met one.
+        GgufValueType::Array => {
+            let mut t_buf = [0u8; 4];
+            reader
+                .read_exact(&mut t_buf)
+                .map_err(|e| AppError::GgufParse {
+                    message: format!("failed to read array type: {e}"),
+                })?;
+            let arr_type = GgufValueType::from_u32(u32::from_le_bytes(t_buf))?;
+            let count = read_u64(reader)?;
+            for _ in 0..count {
+                skip_value(reader, arr_type)?;
+            }
         }
     }
     Ok(())
@@ -370,24 +440,51 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         .unwrap_or("unknown")
         .to_string();
 
-    let param_count = kv.get("general.parameters").and_then(|v| match v {
-        GgufValue::String(s) => parse_param_count(s),
-        GgufValue::UInt64(n) => Some(*n),
-        GgufValue::Int64(n) => Some(*n as u64),
-        _ => None,
-    });
-
-    let quantization = kv
-        .get("general.quantization_version")
+    // `general.parameters` is absent from real-world GGUF headers — the
+    // unsloth Qwen3.8-27B-NVFP4 files carry the count in
+    // `general.size_label` as a string like "27B" instead. Fall back to
+    // the size label so the catalogue shows "27B" rather than "?".
+    let param_count = kv
+        .get("general.parameters")
         .and_then(|v| match v {
-            GgufValue::String(s) => Some(s.clone()),
-            GgufValue::UInt8(n) => Some(format!("Q{}", *n)),
+            GgufValue::String(s) => parse_param_count(s),
+            GgufValue::UInt64(n) => Some(*n),
+            GgufValue::Int64(n) => Some(*n as u64),
             _ => None,
         })
+        .or_else(|| {
+            kv.get("general.size_label").and_then(|v| match v {
+                GgufValue::String(s) => parse_param_count(s),
+                GgufValue::UInt64(n) => Some(*n),
+                GgufValue::Int64(n) => Some(*n as u64),
+                _ => None,
+            })
+        });
+
+    // The human quantization label. `general.quantization_version` is the
+    // GGUF *spec* version of the quant encoding (always 2 today), not a
+    // label — the old code printed it, so every real file showed a bogus
+    // "Q2". The label lives in `general.file_type` (llama.cpp's FTYPE enum):
+    // 0 F32, 1 F16, 2 Q4_0, 3 Q4_1, 7 Q8_0, 8 Q5_0, 9 Q5_1, 10 Q2_K,
+    // 11 Q3_K_S, 12 Q3_K_M, 13 Q3_K_L, 14 Q4_K_S, 15 Q4_K_M, 16 Q5_K_S,
+    // 17 Q5_K_M, 18 Q6_K, 19 IQ2_XXS, 20 IQ2_XS, 21 Q2_K_S, 22 IQ3_XXS,
+    // 23 IQ1_S, 24 IQ4_NL, 25 IQ3_S, 26 IQ2_S, 27 IQ4_XS, 28 MXFP4(+MoE
+    // variants 29/30), 32 NVFP4 (unsloth/Blackwell builds). Unmapped values
+    // degrade to "unknown" rather than inventing a label.
+    let quantization = kv
+        .get("general.file_type")
+        .and_then(|v| match v {
+            GgufValue::UInt32(n) => Some(*n),
+            GgufValue::Int32(n) => Some(*n as u32),
+            GgufValue::UInt64(n) => Some(*n as u32),
+            GgufValue::Int64(n) => Some(*n as u32),
+            _ => None,
+        })
+        .map(ftype_label)
         .unwrap_or_else(|| "unknown".to_string());
 
     let block_count = kv
-        .get(layer_count_key(&architecture))
+        .get(layer_count_key(&architecture).as_str())
         .and_then(|v| match v {
             GgufValue::UInt32(n) => Some(*n),
             GgufValue::Int32(n) => Some(*n as u32),
@@ -765,28 +862,29 @@ mod tests {
             buf.extend_from_slice(&(key_bytes.len() as u64).to_le_bytes());
             buf.extend_from_slice(key_bytes);
 
-            // Value type and data
+            // Value type and data — wire types per the GGUF v3 spec:
+            // string=8, u32=4, u64=10, i32=5, i64=11.
             match value {
                 GgufValue::String(s) => {
-                    buf.extend_from_slice(&11u32.to_le_bytes());
+                    buf.extend_from_slice(&8u32.to_le_bytes());
                     let s_bytes = s.as_bytes();
                     buf.extend_from_slice(&(s_bytes.len() as u64).to_le_bytes());
                     buf.extend_from_slice(s_bytes);
                 }
                 GgufValue::UInt32(n) => {
-                    buf.extend_from_slice(&6u32.to_le_bytes());
+                    buf.extend_from_slice(&4u32.to_le_bytes());
                     buf.extend_from_slice(&n.to_le_bytes());
                 }
                 GgufValue::UInt64(n) => {
-                    buf.extend_from_slice(&7u32.to_le_bytes());
+                    buf.extend_from_slice(&10u32.to_le_bytes());
                     buf.extend_from_slice(&n.to_le_bytes());
                 }
                 GgufValue::Int32(n) => {
-                    buf.extend_from_slice(&2u32.to_le_bytes());
+                    buf.extend_from_slice(&5u32.to_le_bytes());
                     buf.extend_from_slice(&n.to_le_bytes());
                 }
                 GgufValue::Int64(n) => {
-                    buf.extend_from_slice(&3u32.to_le_bytes());
+                    buf.extend_from_slice(&11u32.to_le_bytes());
                     buf.extend_from_slice(&n.to_le_bytes());
                 }
                 _ => unreachable!("unsupported value type in test"),
@@ -803,10 +901,8 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("llama".to_string()),
             ),
-            (
-                "general.quantization_version",
-                GgufValue::String("Q4_K_M".to_string()),
-            ),
+            // general.file_type carries the FTYPE label on the wire (15 = Q4_K_M).
+            ("general.file_type", GgufValue::UInt32(15)),
             ("llama.block_count", GgufValue::UInt32(32)),
             ("llama.context_length", GgufValue::UInt32(4096)),
             ("llama.embedding_length", GgufValue::UInt32(4096)),
@@ -832,10 +928,8 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("mixtral".to_string()),
             ),
-            (
-                "general.quantization_version",
-                GgufValue::String("Q8_0".to_string()),
-            ),
+            // FTYPE 7 = Q8_0
+            ("general.file_type", GgufValue::UInt32(7)),
             ("llama.block_count", GgufValue::UInt32(32)),
             ("llama.expert_count", GgufValue::UInt32(8)),
         ];
@@ -853,16 +947,43 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("llama".to_string()),
             ),
-            (
-                "general.quantization_version",
-                GgufValue::String("NVFP4".to_string()),
-            ),
+            // FTYPE 32 = NVFP4 (unsloth/Blackwell writers)
+            ("general.file_type", GgufValue::UInt32(32)),
             ("llama.block_count", GgufValue::UInt32(32)),
         ];
         let data = make_gguf_bytes(0, kv);
         let meta = parse_metadata(Cursor::new(data)).unwrap();
         assert_eq!(meta.architecture, "llama");
         assert_eq!(meta.quantization, "NVFP4");
+    }
+
+    #[test]
+    fn test_parse_size_label_fallback() {
+        // Real-world headers (unsloth Qwen3.8-27B-NVFP4, captured 9 Sept
+        // 2026) carry the parameter count in `general.size_label` as a
+        // string like "27B" and have no `general.parameters` key at all.
+        // The parser must fall back to the size label so the catalogue
+        // shows a count instead of "?".
+        let mut kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("qwen35".to_string()),
+            ),
+            ("general.size_label", GgufValue::String("27B".to_string())),
+            ("general.file_type", GgufValue::UInt32(7)),
+            ("qwen35.block_count", GgufValue::UInt32(65)),
+        ];
+        let data = make_gguf_bytes(0, kv.clone());
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert_eq!(meta.architecture, "qwen35");
+        assert_eq!(meta.param_count, Some(27_000_000_000));
+        assert_eq!(meta.block_count, 65);
+
+        // `general.parameters` wins when both keys are present.
+        kv.push(("general.parameters", GgufValue::String("70B".to_string())));
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert_eq!(meta.param_count, Some(70_000_000_000));
     }
 
     #[test]
@@ -1028,8 +1149,8 @@ mod tests {
             assert!(!meta.quantization.is_empty());
             assert!(meta.block_count > 0);
             eprintln!(
-                "parsed real GGUF: {} {} {} blocks",
-                meta.architecture, meta.quantization, meta.block_count
+                "parsed real GGUF: {} {} {} blocks params={:?}",
+                meta.architecture, meta.quantization, meta.block_count, meta.param_count
             );
         } else {
             eprintln!("LLAMA_MANAGER_REAL_GGUF not set, skipping");

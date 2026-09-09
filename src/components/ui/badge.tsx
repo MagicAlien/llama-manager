@@ -7,16 +7,18 @@ interface BadgeProps {
 }
 
 export function Badge({ children, variant = "default", className = "" }: BadgeProps) {
+  // Token colours only (T-005's contract): Tailwind's default palette
+  // does not exist in this app — tailwind.config.js replaces it.
   const variants = {
-    default: "bg-muted text-muted-foreground",
-    success: "bg-emerald-900/40 text-emerald-300",
-    warning: "bg-amber-900/40 text-amber-300",
-    error: "bg-red-900/40 text-red-300",
-    info: "bg-sky-900/40 text-sky-300",
+    default: "bg-surface-hover text-muted-foreground",
+    success: "bg-pass/10 text-pass",
+    warning: "bg-warn/10 text-warn",
+    error: "bg-destructive/10 text-destructive",
+    info: "bg-accent/10 text-accent",
   };
 
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${variants[variant]} ${className}`}>
+    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${variants[variant]} ${className}`}>
       {children}
     </span>
   );
