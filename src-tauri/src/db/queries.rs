@@ -231,6 +231,30 @@ pub fn update_model_pinned_and_preload(
     Ok(())
 }
 
+/// The configuration half of a model's catalogue entry: launch params and
+/// sampling defaults, serialized the way every other JSON column is.
+/// T-035's model-detail screen saves through this; identity columns
+/// (`file_path`, `metadata_json`, ...) are never touched here.
+pub fn update_model_params(
+    conn: &rusqlite::Connection,
+    id: &str,
+    launch_params_json: &str,
+    sampling_json: &str,
+) -> Result<(), AppError> {
+    let changed = conn
+        .execute(
+            "UPDATE models SET launch_params_json = ?1, sampling_json = ?2 WHERE id = ?3",
+            params![launch_params_json, sampling_json, id],
+        )
+        .map_err(db_err)?;
+    if changed == 0 {
+        return Err(AppError::NotFound {
+            what: format!("model {id}"),
+        });
+    }
+    Ok(())
+}
+
 pub fn delete_model(conn: &rusqlite::Connection, id: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM models WHERE id = ?1", params![id])
         .map_err(db_err)?;
@@ -918,6 +942,28 @@ mod tests {
         // Delete
         delete_model(&c, "m1").unwrap();
         assert!(get_model(&c, "m1").unwrap().is_none());
+    }
+
+    #[test]
+    fn update_model_params_replaces_only_the_config_columns() {
+        let c = conn();
+        insert_model(&c, &sample_model("m1", "D:/models/test.gguf")).unwrap();
+
+        update_model_params(&c, "m1", r#"{"gpu_layers":35}"#, r#"{"temperature":0.7}"#).unwrap();
+
+        let updated = get_model(&c, "m1").unwrap().unwrap();
+        assert_eq!(updated.launch_params_json, r#"{"gpu_layers":35}"#);
+        assert_eq!(updated.sampling_json, r#"{"temperature":0.7}"#);
+        // Identity columns untouched.
+        assert_eq!(updated.file_path, "D:/models/test.gguf");
+        assert_eq!(updated.metadata_json, "{}");
+        assert!(!updated.pinned && !updated.preload);
+
+        // Unknown model is a typed NotFound, not a silent no-op.
+        assert!(matches!(
+            update_model_params(&c, "missing", "{}", "{}"),
+            Err(AppError::NotFound { .. })
+        ));
     }
 
     #[test]

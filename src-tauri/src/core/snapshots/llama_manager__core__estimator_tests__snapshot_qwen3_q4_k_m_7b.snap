@@ -11,5 +11,8 @@ expression: estimate
   "confidence": "Heuristic",
   "notes": [
     "Conservative margin: 12%"
-  ]
+  ],
+  "vram_total_bytes": 25769803776,
+  "vram_free_bytes": 25769803776,
+  "projector_bytes": 0
 }

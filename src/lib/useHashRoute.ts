@@ -12,7 +12,21 @@ import { DEFAULT_ROUTE_ID, ROUTES, type RouteId } from "./routes";
 // away from.
 function parseHash(hash: string): RouteId {
   const match = ROUTES.find((route) => route.hash === hash);
-  return match ? match.id : DEFAULT_ROUTE_ID;
+  if (match) return match.id;
+  // The model-detail route carries a model id in the hash
+  // (`#/models/detail/<id>`) — match it by prefix, not exact equality,
+  // so the id never has to be a known route.
+  if (hash.startsWith("#/models/detail/")) return "modelDetail";
+  return DEFAULT_ROUTE_ID;
+}
+
+// Read the model id out of `#/models/detail/<id>`, or null when the
+// route is reached without one (e.g. via the sidebar link).
+export function getModelIdFromHash(hash: string): string | null {
+  const prefix = "#/models/detail/";
+  if (!hash.startsWith(prefix)) return null;
+  const id = hash.slice(prefix.length);
+  return id.length > 0 ? id : null;
 }
 
 export function useHashRoute(): RouteId {

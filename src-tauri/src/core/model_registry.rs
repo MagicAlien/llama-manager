@@ -16,10 +16,52 @@ use tracing::{debug, info};
 use crate::core::gguf;
 use crate::core::installer::database_path;
 use crate::core::types::{
-    AppError, Compatibility, ImportJobId, ImportProgress, ModelAvailability, ModelEntry,
-    WatchedFolder,
+    AppError, Compatibility, FlashAttn, ImportJobId, ImportProgress, LaunchParams,
+    ModelAvailability, ModelEntry, SamplingDefaults, WatchedFolder,
 };
 use crate::db::{self, queries};
+
+/// Generate reasonable default launch parameters for a newly imported model.
+/// Called when there are no retained settings to restore.
+/// `block_count` is the model's total layers (from GGUF metadata).
+fn generate_default_launch_params(block_count: u32) -> LaunchParams {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(8);
+    LaunchParams {
+        gpu_layers: Some(block_count), // Max GPU offload by default
+        ctx_size: Some(8000),          // User-specified default
+        batch_size: Some(512),
+        ubatch_size: Some(128),
+        flash_attn: Some(FlashAttn::Auto),
+        cache_type_k: Some("f16".to_string()), // llama.cpp default
+        cache_type_v: Some("f16".to_string()), // llama.cpp default
+        n_cpu_moe: Some(threads),              // Same as main threads
+        tensor_split: None,
+        main_gpu: Some(0), // First GPU by default
+        no_mmap: Some(false),
+        mlock: Some(false),
+        threads: Some(threads),
+        chat_template: None, // Auto-detected from GGUF by llama.cpp
+        mmproj_path: None,
+        extra_args: vec![],
+    }
+}
+
+/// Generate reasonable default sampling parameters for a newly imported model.
+/// Based on llama.cpp's documented defaults.
+fn generate_default_sampling() -> SamplingDefaults {
+    SamplingDefaults {
+        temperature: Some(0.8),
+        top_p: Some(0.9),
+        top_k: Some(40),
+        min_p: Some(0.05),
+        repeat_penalty: Some(1.0),
+        presence_penalty: Some(0.0),
+        frequency_penalty: Some(0.0),
+        seed: None,
+    }
+}
 
 /// Import a list of model files into the registry.
 pub async fn import_models(
@@ -246,6 +288,19 @@ async fn import_paths(
     }
 
     let metadata = gguf::parse_file(&normalized)?;
+
+    // Reject speculative-decoding draft models (DFlash, EAGLE, DSpark, ...).
+    // These are companion models used with `-md`/`--spec-type`, not
+    // standalone-launchable. They must not enter the catalogue as models.
+    if metadata.is_draft_model {
+        return Err(AppError::GgufParse {
+            message: format!(
+                "draft model detected (architecture: {}); not importable as a standalone model",
+                metadata.architecture
+            ),
+        });
+    }
+
     let sha256_head = sha256_head(&normalized)?;
 
     // size_bytes is the WHOLE set: sum of the shard files (the projector
@@ -270,18 +325,24 @@ async fn import_paths(
     let path_str = normalized.display().to_string();
     let retained = queries::get_retained_model_settings(&conn, &path_str)?;
     let (mut retained_launch_params, retained_sampling, retained_preload, retained_pinned): (
-        crate::core::types::LaunchParams,
-        crate::core::types::SamplingDefaults,
+        LaunchParams,
+        SamplingDefaults,
         bool,
         bool,
     ) = match retained {
         Some(r) => (
-            serde_json::from_str(&r.launch_params_json).unwrap_or_default(),
-            serde_json::from_str(&r.sampling_json).unwrap_or_default(),
+            serde_json::from_str(&r.launch_params_json)
+                .unwrap_or_else(|_| generate_default_launch_params(metadata.block_count)),
+            serde_json::from_str(&r.sampling_json).unwrap_or_else(|_| generate_default_sampling()),
             r.preload,
             r.pinned,
         ),
-        None => (Default::default(), Default::default(), false, false),
+        None => (
+            generate_default_launch_params(metadata.block_count),
+            generate_default_sampling(),
+            false,
+            false,
+        ),
     };
     // The projector travels in LaunchParams.mmproj_path (docs/CONTRACTS.md
     // §1). Set it only when discovered now or retained earlier.
@@ -365,6 +426,41 @@ pub fn list_models() -> Result<Vec<ModelEntry>, AppError> {
     let conn = open_db()?;
     let rows = queries::list_models(&conn)?;
     rows.into_iter().map(model_entry_from_row).collect()
+}
+
+/// The single catalogue entry for an id, if it exists (`docs/CONTRACTS.md`
+/// §4 `get_model`; T-035's detail screen loads through it).
+pub fn get_model(id: &str) -> Result<Option<ModelEntry>, AppError> {
+    let conn = open_db()?;
+    let row = queries::get_model(&conn, id)?;
+    row.map(model_entry_from_row).transpose()
+}
+
+/// Save a model's launch params and sampling defaults (`docs/CONTRACTS.md`
+/// §4 `update_model_params`; T-035's detail screen persists through it).
+/// The identity columns (path, metadata, compatibility) are untouched:
+/// they belong to the importer, not to the settings editor.
+pub fn update_model_params(
+    id: &str,
+    launch_params: &LaunchParams,
+    sampling_defaults: &SamplingDefaults,
+) -> Result<ModelEntry, AppError> {
+    let conn = open_db()?;
+    let launch_params_json =
+        serde_json::to_string(launch_params).map_err(|e| AppError::Internal {
+            message: format!("serialize launch_params: {e}"),
+        })?;
+    let sampling_json =
+        serde_json::to_string(sampling_defaults).map_err(|e| AppError::Internal {
+            message: format!("serialize sampling_defaults: {e}"),
+        })?;
+    queries::update_model_params(&conn, id, &launch_params_json, &sampling_json)?;
+    // Re-read through the standard mapper so the returned entry carries a
+    // fresh availability probe, not the stale stored value.
+    let row = queries::get_model(&conn, id)?.ok_or_else(|| AppError::Internal {
+        message: format!("model {id} vanished during update"),
+    })?;
+    model_entry_from_row(row)
 }
 
 /// Live import jobs by id, each with its cancellation flag. The frontend's
@@ -646,4 +742,79 @@ pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
             }
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::gguf::GgufValue;
+
+    /// Build a minimal valid GGUF byte buffer carrying only the keys given.
+    /// Wire types per the GGUF v3 spec: string=8, u32=4.
+    fn minimal_gguf(kv: &[(&str, GgufValue)]) -> Vec<u8> {
+        const MAGIC: u32 = 0x46554747;
+        const VERSION: u32 = 3;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&MAGIC.to_le_bytes());
+        buf.extend_from_slice(&VERSION.to_le_bytes());
+        buf.extend_from_slice(&0u64.to_le_bytes()); // tensor count
+        buf.extend_from_slice(&(kv.len() as u64).to_le_bytes()); // kv count
+        for (key, value) in kv {
+            let key_bytes = key.as_bytes();
+            buf.extend_from_slice(&(key_bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(key_bytes);
+            match value {
+                GgufValue::String(s) => {
+                    buf.extend_from_slice(&8u32.to_le_bytes());
+                    let s_bytes = s.as_bytes();
+                    buf.extend_from_slice(&(s_bytes.len() as u64).to_le_bytes());
+                    buf.extend_from_slice(s_bytes);
+                }
+                GgufValue::UInt32(n) => {
+                    buf.extend_from_slice(&4u32.to_le_bytes());
+                    buf.extend_from_slice(&n.to_le_bytes());
+                }
+                other => panic!("unsupported test value: {other:?}"),
+            }
+        }
+        buf
+    }
+
+    #[tokio::test]
+    async fn test_import_rejects_draft_architecture_before_db_write() {
+        // T-036 acceptance: a draft-architecture file is rejected at import
+        // with a typed, named error — and the rejection happens BEFORE any
+        // row is written, so no DB interaction is required to observe it.
+        let tmp = std::env::temp_dir().join(format!("lm-mgr-draft-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("Qwen3.8-27B-DFlash2.gguf");
+        // A file NAMED like a DFlash draft whose architecture IS a draft
+        // architecture must be rejected on the header, not the name.
+        let bytes = minimal_gguf(&[
+            (
+                "general.architecture",
+                GgufValue::String("dflash2".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(16)),
+        ]);
+        std::fs::write(&file, &bytes).unwrap();
+
+        let result = import_paths(&[file.clone()], None).await;
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        match result {
+            Err(AppError::GgufParse { message }) => {
+                assert!(
+                    message.contains("draft model detected"),
+                    "rejection must name the draft-model reason, got: {message}"
+                );
+                assert!(
+                    message.contains("dflash2"),
+                    "rejection must name the architecture"
+                );
+            }
+            other => panic!("expected a draft-model GgufParse error, got: {other:?}"),
+        }
+    }
 }

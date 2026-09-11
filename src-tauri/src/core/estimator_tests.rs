@@ -7,7 +7,6 @@
 use crate::core::estimator::estimate;
 use crate::core::types::{
     EstimateConfidence, EstimateInputs, GgufMetadata, LaunchParams, LaunchRecord,
-    ModelAvailability, VramEstimate,
 };
 use chrono::Utc;
 use std::path::PathBuf;
@@ -25,6 +24,8 @@ fn make_metadata(architecture: &str, quantization: &str, block_count: u32) -> Gg
         has_chat_template: false,
         is_moe: false,
         expert_count: None,
+        is_draft_model: false,
+        has_mtp_heads: false,
     }
 }
 
@@ -34,6 +35,8 @@ fn make_inputs(metadata: GgufMetadata, file_size: u64, vram_free: u64) -> Estima
         file_size_bytes: file_size,
         params: LaunchParams::default(),
         vram_free_bytes: vram_free,
+        vram_total_bytes: vram_free,
+        projector_bytes: 0,
         ram_free_bytes: 16 * 1024 * 1024 * 1024,
     }
 }
@@ -270,6 +273,50 @@ fn test_cache_quantization_reduces_kv_cache() {
     assert!(
         estimate_q4.kv_cache_bytes < estimate_f16.kv_cache_bytes,
         "q4_0 cache should use less memory than f16"
+    );
+}
+
+#[test]
+fn test_kv_cache_uses_v_cache_type_separately() {
+    // The KV cache formula must read cache_type_k AND cache_type_v
+    // independently: changing only cache_type_v (K held constant) must
+    // change kv_cache_bytes. Regression test for the bug where only the K
+    // type was consulted, so the V dropdown had no effect on the estimate.
+    let metadata = make_metadata("llama", "Q4_K_M", 32);
+    let mut inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
+    inputs.params.gpu_layers = Some(32);
+    inputs.params.ctx_size = Some(8192);
+    inputs.params.cache_type_k = Some("f16".to_string());
+
+    inputs.params.cache_type_v = Some("f16".to_string());
+    let estimate_v_f16 = estimate(&inputs, &[]);
+
+    inputs.params.cache_type_v = Some("q4_0".to_string());
+    let estimate_v_q4 = estimate(&inputs, &[]);
+
+    assert!(
+        estimate_v_q4.kv_cache_bytes < estimate_v_f16.kv_cache_bytes,
+        "kv_cache_bytes must shrink when only cache_type_v is quantized"
+    );
+}
+
+#[test]
+fn test_projector_bytes_included_in_estimate() {
+    // The projector (mmproj) is loaded into VRAM alongside the model; the
+    // estimate must grow when a projector is present.
+    let metadata = make_metadata("llama", "Q4_K_M", 32);
+    let mut inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
+    inputs.params.gpu_layers = Some(32);
+    inputs.params.ctx_size = Some(8192);
+    inputs.projector_bytes = 0;
+    let without = estimate(&inputs, &[]);
+
+    inputs.projector_bytes = 1_000_000_000; // 1 GiB projector
+    let with = estimate(&inputs, &[]);
+
+    assert!(
+        with.estimated_vram_bytes > without.estimated_vram_bytes,
+        "projector_bytes must be included in estimated_vram_bytes"
     );
 }
 

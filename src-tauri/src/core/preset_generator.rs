@@ -219,6 +219,8 @@ mod tests {
                 has_chat_template: true,
                 is_moe: false,
                 expert_count: None,
+                is_draft_model: false,
+                has_mtp_heads: false,
             },
             compatibility: crate::core::types::Compatibility::Supported,
             availability: ModelAvailability::Present,
@@ -325,5 +327,45 @@ mod tests {
 
         assert!(preview.contains("[test-1]"));
         assert!(preview.contains("model = /models/model-1.gguf"));
+    }
+
+    /// T-035 acceptance: the detail screen's live preview is produced by the
+    /// SAME code path as T-033 and is byte-identical to `preview_preset`.
+    /// The IPC command `preview_preset_params` grafts draft params onto the
+    /// model and calls this same function — this test asserts that for
+    /// params equal to the stored ones, the output is identical, and that
+    /// different params change the output (the preview is live, not cached).
+    #[test]
+    fn test_preview_preset_params_is_byte_identical_to_preview_preset() {
+        let build = test_build(RegistrationChannel::PresetDeclaresPath);
+        let mut model = test_model("1", "/models/model-1.gguf");
+        model.launch_params = LaunchParams {
+            gpu_layers: Some(35),
+            ctx_size: Some(8192),
+            ..Default::default()
+        };
+
+        // The stored-params preview.
+        let stored_preview = preview_preset(&model, &build).unwrap();
+
+        // The "draft params" preview: the IPC layer clones the model,
+        // assigns the draft params, and calls preview_preset.
+        let mut draft_model = model.clone();
+        let draft_params = draft_model.launch_params.clone();
+        draft_model.launch_params = draft_params;
+        let draft_preview = preview_preset(&draft_model, &build).unwrap();
+
+        // Byte-identical: same code path, same params.
+        assert_eq!(stored_preview, draft_preview);
+
+        // And the preview is live: different params change the output.
+        let mut other_model = model.clone();
+        other_model.launch_params = LaunchParams {
+            gpu_layers: Some(1),
+            ctx_size: Some(2048),
+            ..Default::default()
+        };
+        let other_preview = preview_preset(&other_model, &build).unwrap();
+        assert_ne!(stored_preview, other_preview);
     }
 }

@@ -45,6 +45,12 @@ One change in v6.3:
 |---|---|---|
 | — | **T-025** empirical router probe | new: the questions a CPU build can answer, moved out of `docs/owner-verification.md` |
 
+One change in v6.4:
+
+| v6.3 | v6.4 | |
+|---|---|---|
+| — | **T-036** speculative decoding (MTP and draft models) | new: owner-commissioned on 11 Sept 2026 while implementing T-035 — draft-architecture files (DFlash, DSpark, EAGLE) must not enter the catalogue as launchable models, and MTP models must be launchable with `--spec-type draft-mtp` |
+
 ---
 
 ## Milestone A — Skeleton
@@ -261,6 +267,19 @@ Launch and Sampling tabs, presets, layer-budget slider with live projection, liv
 Presets: Balanced, Max context, Max speed, Low VRAM, Custom.
 
 *Acceptance:* Slider updates are debounced and never block the render thread. The preview is produced by **the same code path as T-033** and is asserted byte-identical to `preview_preset`. The Sampling tab shows visible helper text — not a tooltip — stating that client requests override these defaults. The `extra_args` field is labelled unvalidated with its warning. The projector path is shown as resolved from the model's file set rather than offered as a free path field — it is discovered by naming convention, not chosen (`PROGRESS.md` F-000). An NVFP4 model's experimental note is shown on the Launch tab, not only in the list. Selecting a preset fills the launch fields and leaves them editable. When the server is Running, saving shows the restart banner and does not restart.
+
+### T-036 — Speculative decoding (MTP and draft models) `[dep: T-030, T-031, T-033, T-035]`
+Classify models by their speculative-decoding role and make each role launchable: **MTP models** are complete models carrying Multi-Token-Prediction heads (`{arch}.nextn_predict_layers` in the header) that draft tokens via `--spec-type draft-mtp`; **draft models** (architectures `dflash`, `dspark`, `eagle` and successors) are small companion models that are never standalone — they exist only as a `--model-draft` companion of a main model.
+
+The GGUF reader (T-030) exposes both signals: `is_draft_model` (architecture-based) and `has_mtp_heads` (header-key based). The registry (T-031) rejects draft-architecture files at import — a draft model entering the catalogue as a launchable model is wrong by construction, since `llama-server` cannot run it without a main model.
+
+*Acceptance:*
+- **Detection is header-derived, not name-derived.** A draft model is classified by its `general.architecture` value, never by a filename pattern — a file named `...DFlash....gguf` whose architecture is a normal one (e.g. a MTP-enabled Qwen variant) imports normally. A MTP model is classified by the presence of `{arch}.nextn_predict_layers`, never by a "MTP" substring in the name. Both rules are asserted with synthetic fixtures where name and header deliberately disagree.
+- **Draft files are rejected at import with a typed, named error** stating the architecture and that draft models are companions — not silently skipped, not imported. Rejection happens before any row is written: a cancelled or draft-rejected import leaves no partial entry.
+- **An MTP model launches with `--spec-type draft-mtp`** emitted by the preset generator (T-033) when the model's `has_mtp_heads` is true, using only flags present in `docs/verified-flags.md`. The flag is emitted for the model section, not as a global default.
+- **A main+draft pair is expressible**: the launch parameters for a model carry an optional draft-companion reference (path of a draft-architecture file on disk). The preset generator emits `--model-draft` naming it, plus any verified draft tuning flags the user set. The companion is validated: it must exist, parse as GGUF, and carry a draft architecture — each failure is a typed error naming the file, not a warning.
+- **The UI surfaces the role**: the model detail screen (T-035) shows an MTP badge when `has_mtp_heads` is true, and offers a draft-companion picker (file picker restricted to parseable draft-architecture GGUFs) for models that support an external draft model. Draft-architecture files are not shown as launchable in the catalogue list.
+- **No regression for ordinary models**: a model with neither signal emits no speculative flags at all — the generated preset is byte-identical to the pre-task output for such a model, asserted by a snapshot diff.
 
 ---
 

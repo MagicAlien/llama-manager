@@ -266,6 +266,12 @@ export function ModelsScreen() {
                   )}
                 </div>
                 <div className="flex items-center gap-4">
+                  <a
+                    href={`#/models/detail/${model.id}`}
+                    className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
+                  >
+                    {strings.screens.models.details}
+                  </a>
                   <label className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Switch
                       checked={model.preload}
