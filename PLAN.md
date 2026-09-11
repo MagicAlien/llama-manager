@@ -448,7 +448,7 @@ llama-manager/
 |---|---|---|
 | **A — Skeleton** | T-000…T-006 | CI, scaffold, DB, error model, design system, documentation lint |
 | **B — Runtime** | T-010…T-025 | Environment probing, binary install, version management, flag verification, empirical router probe |
-| **C — Catalogue** | T-029…T-035 | Paths, GGUF reader, registry, estimator, preset generation, model screens |
+| **C — Catalogue** | T-029…T-036 | Paths, GGUF reader, registry, estimator, preset generation, model screens, speculative decoding |
 | **D — Server** | T-040…T-047 | Supervisor, orchestrator, endpoint transport and behaviour, diagnostics, dashboard, logs, tray and shutdown |
 | **E — API** | T-050…T-052 | API screen, auth and request log, client contract tests |
 | **F — Release** | T-060…T-065 | Telemetry, multi-GPU, crash recovery, settings, installer, E2E |

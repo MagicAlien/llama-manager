@@ -221,7 +221,7 @@ impl GgufValueType {
 
 /// GGUF metadata value.
 #[derive(Debug, Clone)]
-enum GgufValue {
+pub enum GgufValue {
     Int8(i8),
     Int16(i16),
     Int32(i32),
@@ -564,6 +564,9 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         _ => None,
     });
 
+    let is_draft_model = is_draft_architecture(&architecture);
+    let has_mtp_heads = has_mtp_heads(&architecture, &kv);
+
     Ok(GgufMetadata {
         architecture,
         param_count,
@@ -576,6 +579,8 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         has_chat_template,
         is_moe,
         expert_count,
+        is_draft_model,
+        has_mtp_heads,
     })
 }
 
@@ -648,6 +653,28 @@ fn read_f64<R: Read>(reader: &mut R) -> Result<f64, AppError> {
     Ok(f64::from_le_bytes(bytes))
 }
 
+/// Architectures that are speculative-decoding DRAFT models (companion
+/// models used with `-md`/`--spec-type`). These are not
+/// standalone-launchable and must not enter the catalogue as models.
+const DRAFT_ARCHITECTURES: &[&str] = &[
+    "dflash", "dflash2", "dspark", "dspark2", "eagle", "eagle2", "eagle3", "eagle4",
+];
+
+/// Detect whether an architecture is a speculative-decoding draft model.
+pub fn is_draft_architecture(arch: &str) -> bool {
+    DRAFT_ARCHITECTURES.contains(&arch.to_lowercase().as_str())
+}
+
+/// Detect whether a GGUF carries Multi-Token-Prediction heads.
+/// MTP models are COMPLETE models that can additionally draft tokens via
+/// `--spec-type draft-mtp` — they are NOT draft companions.
+pub fn has_mtp_heads(
+    architecture: &str,
+    metadata: &std::collections::HashMap<String, GgufValue>,
+) -> bool {
+    metadata.contains_key(&format!("{architecture}.nextn_predict_layers"))
+}
+
 /// Parse GGUF metadata from a file path.
 pub fn parse_file(path: &Path) -> Result<GgufMetadata, AppError> {
     let file = File::open(path).map_err(|e| AppError::GgufParse {
@@ -656,10 +683,10 @@ pub fn parse_file(path: &Path) -> Result<GgufMetadata, AppError> {
     parse_metadata(file)
 }
 
-/// Check if a path is a projector file (mmproj- prefix).
+/// Check if a path is a projector file (contains "mmproj" in the name).
 pub fn is_projector(path: &Path) -> bool {
     path.file_name()
-        .map(|n| n.to_string_lossy().starts_with("mmproj-"))
+        .map(|n| n.to_string_lossy().contains("mmproj"))
         .unwrap_or(false)
 }
 
@@ -806,8 +833,15 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
         });
     }
 
-    // Match projectors to models by base name
+    // Match projectors to models. The `mmproj-` prefix alone is not enough:
+    // real projectors are named like `mmproj-F16.gguf` (quant tag), not
+    // `mmproj-<model>.gguf`, so a name-prefix match almost never fires.
+    // The reliable association is the DIRECTORY: a projector sits next to the
+    // model it augments. When a directory holds a single model set, its
+    // projector(s) belong to it. Only when several model sets share a
+    // directory do we fall back to a name-prefix guess.
     for proj in projectors {
+        let proj_dir = proj.parent().map(|p| p.to_path_buf());
         let proj_name = proj
             .file_name()
             .ok_or_else(|| AppError::GgufParse {
@@ -815,21 +849,49 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
             })?
             .to_string_lossy()
             .to_string();
-        let model_base = proj_name
+        // A projector's model base name: `mmproj-Foo.gguf` → `Foo`,
+        // `Foo-mmproj-BF16.gguf` → `Foo`.
+        let proj_stem = proj_name.strip_suffix(".gguf").unwrap_or(&proj_name);
+        let model_base = proj_stem
             .strip_prefix("mmproj-")
+            .or_else(|| proj_stem.strip_suffix("-mmproj"))
+            .or_else(|| proj_stem.strip_suffix("-mmproj-BF16"))
             .map(|s| s.to_string())
             .unwrap_or_default();
-        for set in &mut sets {
-            if let Some(first) = set.model_files.first() {
-                let model_name = first
-                    .file_name()
-                    .ok_or_else(|| AppError::GgufParse {
-                        message: format!("path has no file name: {}", first.display()),
-                    })?
-                    .to_string_lossy()
-                    .to_string();
-                if model_name.starts_with(&model_base) {
-                    set.projector = Some(proj.clone());
+
+        // Candidate sets in the same directory.
+        let mut dir_candidates: Vec<&mut ModelSet> = sets
+            .iter_mut()
+            .filter(|s| {
+                if let Some(first) = s.model_files.first() {
+                    first.parent() == proj_dir.as_deref()
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        // Single model set in this directory: the projector is unambiguous.
+        if dir_candidates.len() == 1 {
+            dir_candidates[0].projector = Some(proj.clone());
+            continue;
+        }
+
+        // Multiple model sets share the directory: try a name-prefix match.
+        if dir_candidates.len() > 1 {
+            for set in dir_candidates {
+                if let Some(first) = set.model_files.first() {
+                    let model_name = first
+                        .file_name()
+                        .ok_or_else(|| AppError::GgufParse {
+                            message: format!("path has no file name: {}", first.display()),
+                        })?
+                        .to_string_lossy()
+                        .to_string();
+                    if model_name.starts_with(&model_base) {
+                        set.projector = Some(proj.clone());
+                        break;
+                    }
                 }
             }
         }
@@ -1149,8 +1211,13 @@ mod tests {
             assert!(!meta.quantization.is_empty());
             assert!(meta.block_count > 0);
             eprintln!(
-                "parsed real GGUF: {} {} {} blocks params={:?}",
-                meta.architecture, meta.quantization, meta.block_count, meta.param_count
+                "parsed real GGUF: {} {} {} blocks params={:?} draft={} mtp={}",
+                meta.architecture,
+                meta.quantization,
+                meta.block_count,
+                meta.param_count,
+                meta.is_draft_model,
+                meta.has_mtp_heads
             );
         } else {
             eprintln!("LLAMA_MANAGER_REAL_GGUF not set, skipping");

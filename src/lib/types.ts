@@ -85,7 +85,12 @@ export type EnvironmentReport = { gpus: Array<GpuInfo>, system_ram_bytes: bigint
 export type EstimateConfidence = "Calibrated" | "Heuristic";
 
 // ---- EstimateInputs ----
-export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, params: LaunchParams, vram_free_bytes: bigint, ram_free_bytes: bigint, };
+export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, params: LaunchParams, vram_free_bytes: bigint, vram_total_bytes: bigint, 
+/**
+ * The projector (mmproj) file size, if the model has one. Loaded into
+ * VRAM alongside the model; the estimate must account for it.
+ */
+projector_bytes: bigint, ram_free_bytes: bigint, };
 
 // ---- FlashAttn ----
 /**
@@ -115,7 +120,22 @@ block_count: number, context_length: number | null, embedding_length: number | n
  * of magnitude. When either is absent the estimator says so in its
  * notes rather than assuming they are equal.
  */
-attention_head_count: number | null, attention_head_count_kv: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, };
+attention_head_count: number | null, attention_head_count_kv: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, 
+/**
+ * True when the architecture is a speculative-decoding DRAFT model
+ * (DFlash, DSpark, EAGLE, ...). Draft models are companions used with
+ * `-md`/`--spec-type`; they are not standalone-launchable and must not
+ * enter the catalogue as models. `#[serde(default)]` keeps old DB rows
+ * (written before this field existed) deserializable as `false`.
+ */
+is_draft_model: boolean, 
+/**
+ * True when the GGUF carries Multi-Token-Prediction heads
+ * (`{arch}.nextn_predict_layers`). An MTP model is a COMPLETE,
+ * normally-launchable model that can additionally draft tokens via
+ * `--spec-type draft-mtp` — it is NOT a draft companion.
+ */
+has_mtp_heads: boolean, };
 
 // ---- GpuInfo ----
 export type GpuInfo = { index: number, name: string, 
@@ -360,7 +380,19 @@ export type VerifiedFlag = {
 name: string, takes_value: boolean, allowed_values: Array<string> | null, };
 
 // ---- VramEstimate ----
-export type VramEstimate = { recommended_gpu_layers: number, estimated_vram_bytes: bigint, estimated_ram_bytes: bigint, kv_cache_bytes: bigint, fits_fully: boolean, confidence: EstimateConfidence, notes: Array<string>, };
+export type VramEstimate = { recommended_gpu_layers: number, estimated_vram_bytes: bigint, estimated_ram_bytes: bigint, kv_cache_bytes: bigint, fits_fully: boolean, confidence: EstimateConfidence, notes: Array<string>, 
+/**
+ * The GPU's total VRAM (from the environment probe).
+ */
+vram_total_bytes: bigint, 
+/**
+ * The GPU's currently free VRAM (from the environment probe).
+ */
+vram_free_bytes: bigint, 
+/**
+ * The projector (mmproj) file size, if the model has one.
+ */
+projector_bytes: bigint, };
 
 // ---- WatchedFolder ----
 export type WatchedFolder = { path: string, model_count: number, reachable: boolean, last_scan_at: string | null, };

@@ -69,4 +69,11 @@ describe("ModelsScreen", () => {
     render(<ModelsScreen />);
     expect(await screen.findByText("Remove")).toBeTruthy();
   });
+
+  it("renders a Details link to the model-detail route", async () => {
+    render(<ModelsScreen />);
+    const link = await screen.findByText("Details");
+    // The link target carries the model id so the detail screen can load it.
+    expect(link.closest("a")?.getAttribute("href")).toBe("#/models/detail/model-1");
+  });
 });

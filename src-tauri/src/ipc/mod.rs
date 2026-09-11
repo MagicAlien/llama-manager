@@ -30,7 +30,8 @@ use crate::core::model_registry;
 use crate::core::preset_generator;
 use crate::core::types::{
     AppError, AvailableRelease, Backend, EnvironmentReport, EstimateInputs, ImportJobId,
-    ImportProgress, InstallProgress, ModelEntry, VramEstimate, WatchedFolder,
+    ImportProgress, InstallProgress, LaunchParams, ModelEntry, SamplingDefaults, VramEstimate,
+    WatchedFolder,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -310,6 +311,29 @@ pub fn list_models() -> Result<Vec<ModelEntry>, AppError> {
     model_registry::list_models()
 }
 
+/// `docs/CONTRACTS.md` §4: `get_model | id: String | ModelEntry | T-035`.
+///
+/// The single catalogue entry the model-detail screen edits. NotFound for
+/// an id that is not in the catalogue.
+#[tauri::command]
+pub fn get_model(id: String) -> Result<ModelEntry, AppError> {
+    model_registry::get_model(&id)?.ok_or_else(|| AppError::NotFound {
+        what: format!("model {id}"),
+    })
+}
+
+/// `docs/CONTRACTS.md` §4: `update_model_params | id, LaunchParams,
+/// SamplingDefaults | ModelEntry | T-031` (wired for T-035's detail
+/// screen, which is where the command is called from).
+#[tauri::command]
+pub fn update_model_params(
+    id: String,
+    launch_params: LaunchParams,
+    sampling_defaults: SamplingDefaults,
+) -> Result<ModelEntry, AppError> {
+    model_registry::update_model_params(&id, &launch_params, &sampling_defaults)
+}
+
 /// `docs/CONTRACTS.md` §4: `remove_model | id: String | () | T-031`.
 ///
 /// Removes a model from the catalogue, retaining its settings by path.
@@ -369,7 +393,7 @@ pub fn remove_watched_folder(path: String) -> Result<(), AppError> {
 #[tauri::command]
 pub fn estimate_vram(
     id: String,
-    params: crate::core::types::LaunchParams,
+    launch_params: crate::core::types::LaunchParams,
 ) -> Result<VramEstimate, AppError> {
     let models = model_registry::list_models()?;
     let model = models
@@ -379,13 +403,38 @@ pub fn estimate_vram(
             what: format!("model {id}"),
         })?;
 
+    // Real machine figures, not hard-coded constants. The projection is a
+    // live estimate: it must answer "does this fit on THIS machine", so it
+    // reads the actual GPU VRAM and system RAM. NVML failure degrades to
+    // the first GPU's total (or 0 if no GPU), never a panic — the estimate
+    // then simply reports everything as not fitting, which is honest.
+    let report = crate::core::env_probe::probe(
+        &crate::core::env_probe::RealNvmlProvider::new(),
+        crate::core::env_probe::DEFAULT_LISTEN_PORT,
+    );
+    let first_gpu = report.gpus.first();
+    let vram_free_bytes = first_gpu.map(|g| g.vram_free_bytes).unwrap_or(0);
+    let vram_total_bytes = first_gpu.map(|g| g.vram_total_bytes).unwrap_or(0);
+    let ram_free_bytes = report.system_ram_bytes;
+
+    // The projector (mmproj) is loaded into VRAM alongside the model when
+    // vision capability is configured. Its file size is part of the
+    // projection so "does it fit" accounts for it, not just the weights.
+    let projector_bytes = launch_params
+        .mmproj_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+
     let inputs = EstimateInputs {
         metadata: model.metadata,
         file_size_bytes: model.size_bytes,
-        params,
-        // Use a large default VRAM; the caller can override via params
-        vram_free_bytes: 24 * 1024 * 1024 * 1024,
-        ram_free_bytes: 16 * 1024 * 1024 * 1024,
+        params: launch_params,
+        vram_free_bytes,
+        vram_total_bytes,
+        projector_bytes,
+        ram_free_bytes,
     };
 
     // No history for now — T-041 writes launch_history, T-032 reads it
@@ -406,6 +455,33 @@ pub fn preview_preset(id: String) -> Result<String, AppError> {
         .ok_or_else(|| AppError::NotFound {
             what: format!("model {id}"),
         })?;
+
+    let builds = list_runtimes()?;
+    let build = builds
+        .into_iter()
+        .find(|b| b.is_active)
+        .ok_or_else(|| AppError::NotFound {
+            what: "active runtime build".to_string(),
+        })?;
+
+    preset_generator::preview_preset(&model, &build)
+}
+
+/// T-035: live preset preview for DRAFT (unsaved) launch params.
+///
+/// The model-detail screen's preview must track the layer-budget slider and
+/// other edits before anything is saved, so it cannot read the stored params
+/// from the database. This command takes the draft `LaunchParams`, grafts
+/// them onto the model, and runs them through the SAME `preset_generator::
+/// preview_preset` path T-033 uses. For params equal to the stored ones the
+/// output is byte-identical to `preview_preset(id)` — the acceptance
+/// criterion is asserted by a test, not assumed.
+#[tauri::command]
+pub fn preview_preset_params(id: String, launch_params: LaunchParams) -> Result<String, AppError> {
+    let mut model = model_registry::get_model(&id)?.ok_or_else(|| AppError::NotFound {
+        what: format!("model {id}"),
+    })?;
+    model.launch_params = launch_params;
 
     let builds = list_runtimes()?;
     let build = builds

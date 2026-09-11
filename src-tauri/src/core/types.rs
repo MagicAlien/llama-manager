@@ -367,6 +367,19 @@ pub struct GgufMetadata {
     pub has_chat_template: bool,
     pub is_moe: bool,
     pub expert_count: Option<u32>,
+    /// True when the architecture is a speculative-decoding DRAFT model
+    /// (DFlash, DSpark, EAGLE, ...). Draft models are companions used with
+    /// `-md`/`--spec-type`; they are not standalone-launchable and must not
+    /// enter the catalogue as models. `#[serde(default)]` keeps old DB rows
+    /// (written before this field existed) deserializable as `false`.
+    #[serde(default)]
+    pub is_draft_model: bool,
+    /// True when the GGUF carries Multi-Token-Prediction heads
+    /// (`{arch}.nextn_predict_layers`). An MTP model is a COMPLETE,
+    /// normally-launchable model that can additionally draft tokens via
+    /// `--spec-type draft-mtp` — it is NOT a draft companion.
+    #[serde(default)]
+    pub has_mtp_heads: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -579,6 +592,10 @@ pub struct EstimateInputs {
     pub file_size_bytes: u64,
     pub params: LaunchParams,
     pub vram_free_bytes: u64,
+    pub vram_total_bytes: u64,
+    /// The projector (mmproj) file size, if the model has one. Loaded into
+    /// VRAM alongside the model; the estimate must account for it.
+    pub projector_bytes: u64,
     pub ram_free_bytes: u64,
 }
 
@@ -592,6 +609,12 @@ pub struct VramEstimate {
     pub fits_fully: bool,
     pub confidence: EstimateConfidence,
     pub notes: Vec<String>,
+    /// The GPU's total VRAM (from the environment probe).
+    pub vram_total_bytes: u64,
+    /// The GPU's currently free VRAM (from the environment probe).
+    pub vram_free_bytes: u64,
+    /// The projector (mmproj) file size, if the model has one.
+    pub projector_bytes: u64,
 }
 
 // `pub fn estimate(...)` (docs/CONTRACTS.md §1) is logic, not a type — T-032's
@@ -889,6 +912,8 @@ mod tests {
                 has_chat_template: true,
                 is_moe: false,
                 expert_count: None,
+                is_draft_model: false,
+                has_mtp_heads: false,
             },
             compatibility: Compatibility::Supported,
             availability: ModelAvailability::Present,

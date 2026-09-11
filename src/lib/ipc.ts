@@ -98,6 +98,17 @@ export function listModels(): Promise<ModelEntry[]> {
   return invoke<ModelEntry[]>("list_models");
 }
 
+// T-035 — the single catalogue entry the detail screen edits.
+export function getModel(id: string): Promise<ModelEntry> {
+  return invoke<ModelEntry>("get_model", { id });
+}
+
+// T-035 — live preset preview for draft (unsaved) launch params,
+// produced by the same T-033 code path as preview_preset.
+export function previewPresetParams(id: string, launchParams: LaunchParams): Promise<string> {
+  return invoke<string>("preview_preset_params", { id, launchParams });
+}
+
 // T-031
 export function rescanModels(): Promise<ModelEntry[]> {
   return invoke<ModelEntry[]>("rescan_models");

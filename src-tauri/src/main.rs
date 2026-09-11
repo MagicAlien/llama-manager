@@ -101,6 +101,8 @@ fn main() {
             ipc::get_import_status,
             ipc::cancel_import,
             ipc::list_models,
+            ipc::get_model,
+            ipc::update_model_params,
             ipc::remove_model,
             ipc::set_model_preload,
             ipc::set_model_pinned,
@@ -109,7 +111,8 @@ fn main() {
             ipc::list_watched_folders,
             ipc::rescan_models,
             ipc::estimate_vram,
-            ipc::preview_preset
+            ipc::preview_preset,
+            ipc::preview_preset_params
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,7 +7,6 @@
 use crate::core::estimator::estimate;
 use crate::core::types::{
     EstimateConfidence, EstimateInputs, GgufMetadata, LaunchParams, LaunchRecord,
-    ModelAvailability, VramEstimate,
 };
 use chrono::Utc;
 use std::path::PathBuf;
@@ -25,6 +24,8 @@ fn make_metadata(architecture: &str, quantization: &str, block_count: u32) -> Gg
         has_chat_template: false,
         is_moe: false,
         expert_count: None,
+        is_draft_model: false,
+        has_mtp_heads: false,
     }
 }
 
@@ -34,6 +35,8 @@ fn make_inputs(metadata: GgufMetadata, file_size: u64, vram_free: u64) -> Estima
         file_size_bytes: file_size,
         params: LaunchParams::default(),
         vram_free_bytes: vram_free,
+        vram_total_bytes: vram_free,
+        projector_bytes: 0,
         ram_free_bytes: 16 * 1024 * 1024 * 1024,
     }
 }

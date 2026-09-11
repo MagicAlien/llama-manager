@@ -39,10 +39,12 @@ struct VramCalcParams<'a> {
     ctx_size: u32,
     attention_head_count_kv: u32,
     head_dim: u32,
-    cache_type: Option<&'a str>,
+    cache_type_k: Option<&'a str>,
+    cache_type_v: Option<&'a str>,
     ubatch_size: u32,
     embedding_length: u32,
     margin: f64,
+    projector_bytes: u64,
 }
 
 /// Bytes per element for different cache quantizations.
@@ -65,26 +67,35 @@ fn head_dim(embedding_length: Option<u32>, attention_head_count: Option<u32>) ->
 
 /// Compute the KV cache size in bytes.
 ///
-/// Formula: 2 × ctx_size × min(gpu_layers, block_count) × attention_head_count_kv × head_dim × bytes_per_element
+/// Formula: (K bytes + V bytes) per layer × layers
+/// K bytes = ctx_size × attention_head_count_kv × head_dim × bytes_per_element(cache_type_k)
+/// V bytes = ctx_size × attention_head_count_kv × head_dim × bytes_per_element(cache_type_v)
+/// Total = 2 × ctx_size × min(gpu_layers, block_count) × attention_head_count_kv × head_dim × avg_bytes_per_element
 fn kv_cache_bytes(
     ctx_size: u32,
     gpu_layers: u32,
     block_count: u32,
     attention_head_count_kv: u32,
     head_dim: u32,
-    cache_type: Option<&str>,
+    cache_type_k: Option<&str>,
+    cache_type_v: Option<&str>,
 ) -> u64 {
     let min_layers = std::cmp::min(gpu_layers, block_count);
     if min_layers == 0 {
         return 0;
     }
 
+    let k_bytes_per_element = bytes_per_element(cache_type_k);
+    let v_bytes_per_element = bytes_per_element(cache_type_v);
+    // Average bytes per element for K and V combined
+    let avg_bytes_per_element = (k_bytes_per_element + v_bytes_per_element) / 2.0;
+
     let result = 2.0
         * ctx_size as f64
         * min_layers as f64
         * attention_head_count_kv as f64
         * head_dim as f64
-        * bytes_per_element(cache_type);
+        * avg_bytes_per_element;
 
     result as u64
 }
@@ -111,11 +122,15 @@ fn estimate_vram_for_layers(params: &VramCalcParams) -> u64 {
         params.block_count,
         params.attention_head_count_kv,
         params.head_dim,
-        params.cache_type,
+        params.cache_type_k,
+        params.cache_type_v,
     ) as f64;
     let compute_buffer = compute_buffer_size(params.ubatch_size, params.embedding_length) as f64;
+    // The projector (mmproj) is loaded fully into VRAM when the model has
+    // vision capability; it is independent of the GPU-layer split.
+    let projector = params.projector_bytes as f64;
 
-    let total = weights_gpu + kv_bytes + compute_buffer + C_CONTEXT as f64;
+    let total = weights_gpu + kv_bytes + compute_buffer + projector + C_CONTEXT as f64;
     (total * (1.0 + params.margin)) as u64
 }
 
@@ -163,10 +178,12 @@ fn recommend_gpu_layers(inputs: &EstimateInputs, block_count: u32, margin: f64) 
             ctx_size,
             attention_head_count_kv,
             head_dim,
-            cache_type: inputs.params.cache_type_k.as_deref(),
+            cache_type_k: inputs.params.cache_type_k.as_deref(),
+            cache_type_v: inputs.params.cache_type_v.as_deref(),
             ubatch_size,
             embedding_length,
             margin,
+            projector_bytes: inputs.projector_bytes,
         };
         let vram = estimate_vram_for_layers(&params);
         if vram <= inputs.vram_free_bytes {
@@ -244,10 +261,12 @@ fn compute_bias(history: &[LaunchRecord], inputs: &EstimateInputs) -> f64 {
             ctx_size: record.params.ctx_size.unwrap_or(ctx_size),
             attention_head_count_kv,
             head_dim,
-            cache_type: record.params.cache_type_k.as_deref(),
+            cache_type_k: record.params.cache_type_k.as_deref(),
+            cache_type_v: record.params.cache_type_v.as_deref(),
             ubatch_size: record.params.ubatch_size.unwrap_or(ubatch_size),
             embedding_length,
             margin: MARGIN,
+            projector_bytes: inputs.projector_bytes,
         };
         let estimated = estimate_vram_for_layers(&params);
         if estimated > 0 {
@@ -341,6 +360,9 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
                 fits_fully: true,
                 confidence,
                 notes,
+                vram_total_bytes: inputs.vram_total_bytes,
+                vram_free_bytes: inputs.vram_free_bytes,
+                projector_bytes: 0,
             };
         }
         let calibrated_vram = (total / count) as f64 * (1.0 + margin);
@@ -357,6 +379,7 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
             attention_head_count_kv,
             head_dim,
             inputs.params.cache_type_k.as_deref(),
+            inputs.params.cache_type_v.as_deref(),
         );
         notes.push(format!(
             "Calibrated from {} recent matching launches",
@@ -370,6 +393,9 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
             fits_fully: estimated_vram <= inputs.vram_free_bytes,
             confidence,
             notes,
+            vram_total_bytes: inputs.vram_total_bytes,
+            vram_free_bytes: inputs.vram_free_bytes,
+            projector_bytes: inputs.projector_bytes,
         };
     }
 
@@ -385,10 +411,12 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
         ctx_size,
         attention_head_count_kv,
         head_dim,
-        cache_type: inputs.params.cache_type_k.as_deref(),
+        cache_type_k: inputs.params.cache_type_k.as_deref(),
+        cache_type_v: inputs.params.cache_type_v.as_deref(),
         ubatch_size,
         embedding_length,
         margin,
+        projector_bytes: inputs.projector_bytes,
     };
     let estimated_vram = estimate_vram_for_layers(&params);
 
@@ -405,6 +433,7 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
         attention_head_count_kv,
         head_dim,
         inputs.params.cache_type_k.as_deref(),
+        inputs.params.cache_type_v.as_deref(),
     );
 
     // Apply bias from non-matching history
@@ -422,6 +451,9 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
             fits_fully: biased_vram <= inputs.vram_free_bytes,
             confidence,
             notes,
+            vram_total_bytes: inputs.vram_total_bytes,
+            vram_free_bytes: inputs.vram_free_bytes,
+            projector_bytes: inputs.projector_bytes,
         };
     }
 
@@ -433,6 +465,9 @@ pub fn estimate(inputs: &EstimateInputs, history: &[LaunchRecord]) -> VramEstima
         fits_fully: estimated_vram <= inputs.vram_free_bytes,
         confidence,
         notes,
+        vram_total_bytes: inputs.vram_total_bytes,
+        vram_free_bytes: inputs.vram_free_bytes,
+        projector_bytes: inputs.projector_bytes,
     }
 }
 
@@ -454,6 +489,8 @@ mod tests {
             has_chat_template: false,
             is_moe: false,
             expert_count: None,
+            is_draft_model: false,
+            has_mtp_heads: false,
         }
     }
 
@@ -463,7 +500,9 @@ mod tests {
             file_size_bytes: file_size,
             params: LaunchParams::default(),
             vram_free_bytes: 24 * 1024 * 1024 * 1024, // 24 GB
-            ram_free_bytes: 16 * 1024 * 1024 * 1024,  // 16 GB
+            vram_total_bytes: 24 * 1024 * 1024 * 1024, // 24 GB
+            projector_bytes: 0,
+            ram_free_bytes: 16 * 1024 * 1024 * 1024, // 16 GB
         }
     }
 
@@ -504,8 +543,17 @@ mod tests {
     #[test]
     fn test_kv_cache_bytes() {
         // 2 × 2048 × 32 × 8 × 128 × 2 = 268,435,456 bytes
-        let result = kv_cache_bytes(2048, 32, 32, 8, 128, Some("f16"));
+        let result = kv_cache_bytes(2048, 32, 32, 8, 128, Some("f16"), Some("f16"));
         assert_eq!(result, 268_435_456);
+    }
+
+    #[test]
+    fn test_kv_cache_bytes_mixed_cache_types() {
+        // K as f16 (2.0 bytes/element), V as q8_0 (1.0 bytes/element)
+        // avg = 1.5 bytes/element
+        // 2 × 2048 × 32 × 8 × 128 × 1.5 = 201,326,592 bytes
+        let result = kv_cache_bytes(2048, 32, 32, 8, 128, Some("f16"), Some("q8_0"));
+        assert_eq!(result, 201_326_592);
     }
 
     #[test]
