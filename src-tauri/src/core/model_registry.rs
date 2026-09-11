@@ -743,3 +743,78 @@ pub fn list_watched_folders() -> Result<Vec<WatchedFolder>, AppError> {
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::gguf::GgufValue;
+
+    /// Build a minimal valid GGUF byte buffer carrying only the keys given.
+    /// Wire types per the GGUF v3 spec: string=8, u32=4.
+    fn minimal_gguf(kv: &[(&str, GgufValue)]) -> Vec<u8> {
+        const MAGIC: u32 = 0x46554747;
+        const VERSION: u32 = 3;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&MAGIC.to_le_bytes());
+        buf.extend_from_slice(&VERSION.to_le_bytes());
+        buf.extend_from_slice(&0u64.to_le_bytes()); // tensor count
+        buf.extend_from_slice(&(kv.len() as u64).to_le_bytes()); // kv count
+        for (key, value) in kv {
+            let key_bytes = key.as_bytes();
+            buf.extend_from_slice(&(key_bytes.len() as u64).to_le_bytes());
+            buf.extend_from_slice(key_bytes);
+            match value {
+                GgufValue::String(s) => {
+                    buf.extend_from_slice(&8u32.to_le_bytes());
+                    let s_bytes = s.as_bytes();
+                    buf.extend_from_slice(&(s_bytes.len() as u64).to_le_bytes());
+                    buf.extend_from_slice(s_bytes);
+                }
+                GgufValue::UInt32(n) => {
+                    buf.extend_from_slice(&4u32.to_le_bytes());
+                    buf.extend_from_slice(&n.to_le_bytes());
+                }
+                other => panic!("unsupported test value: {other:?}"),
+            }
+        }
+        buf
+    }
+
+    #[tokio::test]
+    async fn test_import_rejects_draft_architecture_before_db_write() {
+        // T-036 acceptance: a draft-architecture file is rejected at import
+        // with a typed, named error — and the rejection happens BEFORE any
+        // row is written, so no DB interaction is required to observe it.
+        let tmp = std::env::temp_dir().join(format!("lm-mgr-draft-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("Qwen3.8-27B-DFlash2.gguf");
+        // A file NAMED like a DFlash draft whose architecture IS a draft
+        // architecture must be rejected on the header, not the name.
+        let bytes = minimal_gguf(&[
+            (
+                "general.architecture",
+                GgufValue::String("dflash2".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(16)),
+        ]);
+        std::fs::write(&file, &bytes).unwrap();
+
+        let result = import_paths(&[file.clone()], None).await;
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        match result {
+            Err(AppError::GgufParse { message }) => {
+                assert!(
+                    message.contains("draft model detected"),
+                    "rejection must name the draft-model reason, got: {message}"
+                );
+                assert!(
+                    message.contains("dflash2"),
+                    "rejection must name the architecture"
+                );
+            }
+            other => panic!("expected a draft-model GgufParse error, got: {other:?}"),
+        }
+    }
+}

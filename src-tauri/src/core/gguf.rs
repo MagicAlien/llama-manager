@@ -984,6 +984,99 @@ mod tests {
     }
 
     #[test]
+    fn test_draft_detection_is_architecture_based() {
+        // T-036 acceptance: a draft model is classified by its
+        // general.architecture value, never by a filename pattern.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("dflash".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(16)),
+        ];
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert!(
+            meta.is_draft_model,
+            "dflash architecture must be a draft model"
+        );
+        assert!(!meta.has_mtp_heads);
+
+        // A normal architecture is not a draft model.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("llama".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(32)),
+        ];
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert!(
+            !meta.is_draft_model,
+            "llama architecture is not a draft model"
+        );
+    }
+
+    #[test]
+    fn test_mtp_detection_is_header_based() {
+        // T-036 acceptance: an MTP model is classified by the presence of
+        // {arch}.nextn_predict_layers, never by a "MTP" substring in the
+        // name. A normal architecture with the header key is MTP.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("qwen3".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(64)),
+            ("qwen3.nextn_predict_layers", GgufValue::UInt32(1)),
+        ];
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert!(
+            meta.has_mtp_heads,
+            "qwen3 with nextn_predict_layers must be MTP"
+        );
+        assert!(
+            !meta.is_draft_model,
+            "a complete MTP model is not a draft companion"
+        );
+
+        // Same architecture without the header key is not MTP.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("qwen3".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(64)),
+        ];
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert!(
+            !meta.has_mtp_heads,
+            "no nextn_predict_layers key means no MTP heads"
+        );
+    }
+
+    #[test]
+    fn test_draft_and_mtp_signals_are_independent() {
+        // A draft-architecture file must not be reported as MTP, and an
+        // MTP file must not be reported as a draft companion — the two
+        // roles are mutually exclusive by construction.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("eagle3".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(10)),
+        ];
+        let data = make_gguf_bytes(0, kv);
+        let meta = parse_metadata(Cursor::new(data)).unwrap();
+        assert!(meta.is_draft_model);
+        assert!(!meta.has_mtp_heads);
+    }
+
+    #[test]
     fn test_parse_moe_metadata() {
         let kv = vec![
             (
@@ -1195,6 +1288,35 @@ mod tests {
         let dir = fixtures_dir();
         let models = scan_directory(&dir).expect("should scan directory");
         assert!(!models.is_empty());
+    }
+
+    #[test]
+    fn test_scan_directory_associates_projector_by_directory() {
+        // A projector sitting next to a model in the same directory is
+        // associated with it, even when the name prefix does not match
+        // (real projectors are named like `mmproj-F16.gguf`, not
+        // `mmproj-<model>.gguf`). Regression test for the directory-based
+        // association fix.
+        let tmp = std::env::temp_dir().join(format!("lm-mgr-proj-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // A model and a projector whose name prefix does NOT match the model.
+        std::fs::write(tmp.join("SomeModel-Q4_K_M.gguf"), [0u8; 16]).unwrap();
+        std::fs::write(tmp.join("mmproj-F16.gguf"), [0u8; 16]).unwrap();
+
+        let sets = scan_directory(&tmp).expect("should scan temp directory");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(sets.len(), 1, "one model set expected");
+        let proj = sets[0]
+            .projector
+            .as_ref()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string());
+        assert_eq!(
+            proj,
+            Some("mmproj-F16.gguf".to_string()),
+            "projector in the same directory must be associated"
+        );
     }
 
     #[test]
