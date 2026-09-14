@@ -17,6 +17,7 @@ import type {
   AppSettings,
   AvailableRelease,
   Backend,
+  DraftCompanionInfo,
   EndpointState,
   EnvironmentReport,
   LaunchParams,
@@ -141,6 +142,13 @@ export function estimateVram(id: string, launchParams: LaunchParams): Promise<Vr
 // T-033
 export function previewPreset(id: string): Promise<string> {
   return invoke<string>("preview_preset", { id });
+}
+
+// T-036 — validate a candidate draft companion before it is saved. The
+// picker calls this on every candidate so an unusable file is rejected at
+// pick time, not at save time; the backend validates again on the write path.
+export function validateDraftCompanion(path: string): Promise<DraftCompanionInfo> {
+  return invoke<DraftCompanionInfo>("validate_draft_companion", { path });
 }
 
 // T-031 — settings and history retained by path.

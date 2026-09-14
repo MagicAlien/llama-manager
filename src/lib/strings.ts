@@ -195,9 +195,11 @@ export const strings = {
         chatTemplateHint: "Leave empty to use the chat template embedded in the model (auto-detected from the GGUF).",
         extraArgs: "Extra arguments",
         extraArgsWarning: "Unvalidated — passed to the server as-is.",
-        previewTitle: "Command preview",
-        previewEmpty: "No active build yet — install one to preview the command.",
-        previewError: "Could not load the command preview.",
+        previewTitle: "Preset preview",
+        previewExplain:
+          "What the manager writes for this model in the preset file the server reads at start. The server command line itself is built when the server starts, with the port and file paths chosen then.",
+        previewEmpty: "No active build yet — install one to see what would be written.",
+        previewError: "Preset preview unavailable:",
         experimentalNote: "This model uses an experimental quantization.",
         save: "Save launch settings",
         saved: "Launch settings saved.",
@@ -214,6 +216,42 @@ export const strings = {
         projectionDoesntFit: "Does not fully fit in VRAM",
         projectionNotes: "Notes",
         projectionLoading: "Projecting…",
+        // T-036 — speculative decoding. The role is read from the model's
+        // GGUF header (MTP heads) or from the draft companion the user
+        // attaches; nothing here is inferred from a filename.
+        mtpBadge: "MTP",
+        draftBadge: "Draft companion",
+        speculativeTitle: "Speculative decoding",
+        speculativeMtpNote:
+          "This model carries MTP heads and drafts its own tokens (spec-type draft-mtp).",
+        speculativeNoneNote:
+          "This model has no MTP heads. Attach a draft model to draft tokens with a companion.",
+        speculativeExplicitType: "Speculative type",
+        draftLabel: "Draft model",
+        draftNone: "None",
+        draftChoose: "Choose draft model…",
+        draftReplace: "Replace",
+        draftRemove: "Remove",
+        draftHint:
+          "Optional. A small helper model that proposes tokens for this model to verify — generation gets faster, the answers stay the same. It runs together with this model and never on its own. A normal model file is refused here: only helper models of a matching type are accepted.",
+        draftTuningMtpNote:
+          "This model drafts with its own built-in prediction heads. These settings tune how many tokens it proposes at a time.",
+        draftTuningNote:
+          "These settings tune how many tokens the helper model proposes at a time.",
+        draftPathLabel: "Path",
+        draftArchitectureLabel: "Architecture",
+        draftSizeLabel: "Size",
+        draftValidationFailed: "This file cannot be used as a draft model.",
+        draftTuningTitle: "Draft tuning",
+        draftTuningHint: "Empty fields use the build's own defaults.",
+        draftNMax: "Draft tokens (max)",
+        draftNMin: "Draft tokens (min)",
+        draftPMin: "Min probability",
+        draftThreads: "Draft CPU threads",
+        draftCacheTypeK: "Draft K cache type",
+        draftCacheTypeV: "Draft V cache type",
+        draftCacheDefault: "Build default",
+        draftFilterName: "GGUF model",
       },
       sampling: {
         temperature: "Temperature",

@@ -112,7 +112,8 @@ fn main() {
             ipc::rescan_models,
             ipc::estimate_vram,
             ipc::preview_preset,
-            ipc::preview_preset_params
+            ipc::preview_preset_params,
+            ipc::validate_draft_companion
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
