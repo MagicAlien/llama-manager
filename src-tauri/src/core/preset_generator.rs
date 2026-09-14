@@ -457,8 +457,8 @@ mod tests {
     /// fixture mid-run (observed as an intermittent single failure).
     fn gguf_fixture(name: &str, architecture: &str) -> PathBuf {
         let stem = name.replace('.', "-");
-        let dir = std::env::temp_dir()
-            .join(format!("lm-mgr-t036-preset-{stem}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lm-mgr-t036-preset-{stem}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create tmp dir");
         let path = dir.join(name);
         let mut buf = Vec::new();
