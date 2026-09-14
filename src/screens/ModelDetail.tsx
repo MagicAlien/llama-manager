@@ -6,17 +6,23 @@ import {
   listModels,
   previewPresetParams,
   updateModelParams,
+  validateDraftCompanion,
 } from "@/lib/ipc";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { strings } from "@/lib/strings";
 import type {
+  DraftCompanionInfo,
   LaunchParams,
   ModelEntry,
   SamplingDefaults,
   ServerState,
+  SpeculativeParams,
   VramEstimate,
 } from "@/lib/types";
+import { describeError } from "@/lib/errors";
 import { getModelIdFromHash } from "@/lib/useHashRoute";
 import { Loading } from "@/components/ui/loading";
+import { Badge } from "@/components/ui/badge";
 
 // T-035: the model-detail screen. Launch and Sampling tabs, layer-budget
 // slider with live projection, live preset preview (same code path as T-033)
@@ -46,8 +52,24 @@ const EMPTY_LAUNCH_PARAMS: LaunchParams = {
   threads: null,
   chat_template: null,
   mmproj_path: null,
+  speculative: null,
   extra_args: [],
 };
+
+// T-036 — an empty speculative configuration. A null `draft_companion` means
+// the model drafts with its own MTP heads; the tuning fields start empty,
+// which means "use the build's own defaults", not "zero".
+function emptySpeculative(companion: string | null): SpeculativeParams {
+  return {
+    draft_companion: companion,
+    n_max: null,
+    n_min: null,
+    p_min: null,
+    threads: null,
+    cache_type_k: null,
+    cache_type_v: null,
+  };
+}
 
 const EMPTY_SAMPLING_DEFAULTS: SamplingDefaults = {
   temperature: null,
@@ -117,6 +139,43 @@ function textField(label: string, value: string | null, onChange: (value: string
   );
 }
 
+// A dropdown launch field. Only values the backend can actually use appear
+// here — an option that cannot be chosen is a bug, not a default.
+function selectField(
+  label: string,
+  value: string,
+  options: ReadonlyArray<{ value: string; label: string }>,
+  onChange: (value: string) => void,
+) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <select
+        className="rounded-md border border-border bg-input px-3 py-2 text-sm text-foreground"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+// The K/V cache types the build accepts. `cacheTypeDefault` is the unset
+// state — the build's own default stands, which is not the same as picking
+// one of the four.
+const CACHE_TYPE_OPTIONS = [
+  { value: "", label: strings.screens.modelDetail.launch.draftCacheDefault },
+  { value: "f16", label: strings.screens.modelDetail.launch.cacheTypeF16 },
+  { value: "bf16", label: strings.screens.modelDetail.launch.cacheTypeBF16 },
+  { value: "q8_0", label: strings.screens.modelDetail.launch.cacheTypeQ8 },
+  { value: "q4_0", label: strings.screens.modelDetail.launch.cacheTypeQ4 },
+];
+
 export function ModelDetailScreen() {
   const [modelId, setModelId] = useState<string | null>(() =>
     getModelIdFromHash(window.location.hash),
@@ -134,7 +193,16 @@ export function ModelDetailScreen() {
   const [serverState, setServerState] = useState<ServerState | null>(null);
   const [justSaved, setJustSaved] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // T-036: the validated facts about the selected draft companion, and the
+  // reason a candidate was refused. Validation is the backend's call — the
+  // picker never decides on its own that a file is usable.
+  const [companionInfo, setCompanionInfo] = useState<DraftCompanionInfo | null>(null);
+  const [companionError, setCompanionError] = useState<string | null>(null);
+  const [pickingDraft, setPickingDraft] = useState(false);
+
+  const speculative = draftLaunch.speculative;
+  const draftCompanionPath = speculative?.draft_companion ?? null;
 
   // Re-read the id when the hash changes (picker navigation, back button).
   useEffect(() => {
@@ -163,7 +231,7 @@ export function ModelDetailScreen() {
             setDraftSampling(m.sampling_defaults);
             setSavedSampling(m.sampling_defaults);
             setJustSaved(false);
-            setSaveError(false);
+            setSaveError(null);
           }
         }
       };
@@ -211,13 +279,93 @@ export function ModelDetailScreen() {
         })
         .catch((err: unknown) => {
           setPreview(null);
-          setPreviewError(String(err));
+          setPreviewError(describeError(err));
         });
     }, 400);
     return () => clearTimeout(timer);
   }, [model, draftLaunch, tab]);
 
   const serverRunning = serverState !== null && typeof serverState === "object" && "Running" in serverState;
+
+  // T-036: keep the companion's validated facts in sync with the form — both
+  // for a companion just picked and for one restored from the stored params.
+  // A file deleted after it was saved surfaces here as a refused candidate
+  // rather than as a silent preset pointing at nothing.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (draftCompanionPath === null) {
+        setCompanionInfo(null);
+        setCompanionError(null);
+        return;
+      }
+      validateDraftCompanion(draftCompanionPath)
+        .then((info) => {
+          setCompanionInfo(info);
+          setCompanionError(null);
+        })
+        .catch((err: unknown) => {
+          setCompanionInfo(null);
+          setCompanionError(describeError(err));
+        });
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [draftCompanionPath]);
+
+  // Pick a draft companion. The OS dialog can filter by extension only, so
+  // the architecture check is the backend's (`validate_draft_companion`): a
+  // complete model chosen here is refused, with the reason shown.
+  const chooseDraftCompanion = async () => {
+    if (!model) return;
+    setPickingDraft(true);
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [
+          {
+            name: strings.screens.modelDetail.launch.draftFilterName,
+            extensions: ["gguf"],
+          },
+        ],
+      });
+      if (typeof selected !== "string") return;
+      const info = await validateDraftCompanion(selected);
+      setCompanionInfo(info);
+      setCompanionError(null);
+      setLaunch({
+        ...draftLaunch,
+        speculative: { ...(speculative ?? emptySpeculative(null)), draft_companion: selected },
+      });
+    } catch (err: unknown) {
+      setCompanionInfo(null);
+      setCompanionError(describeError(err));
+    } finally {
+      setPickingDraft(false);
+    }
+  };
+
+  // Patch one draft-stage field. The object is created on first edit, so a
+  // model that drafts with its own MTP heads can be tuned without ever
+  // picking a companion file.
+  const updateSpeculative = (patch: Partial<SpeculativeParams>) => {
+    setLaunch({
+      ...draftLaunch,
+      speculative: { ...(speculative ?? emptySpeculative(null)), ...patch },
+    });
+  };
+
+  // Dropping the companion returns the model to its own head configuration:
+  // an MTP model drafts with its MTP heads again, an ordinary one does not
+  // draft at all.
+  const removeDraftCompanion = () => {
+    setCompanionInfo(null);
+    setCompanionError(null);
+    // The draft-stage tuning survives: an MTP model still drafts with its own
+    // heads after its companion is dropped.
+    setLaunch({
+      ...draftLaunch,
+      speculative: speculative ? { ...speculative, draft_companion: null } : null,
+    });
+  };
 
   const isDirty = useMemo(
     () =>
@@ -229,15 +377,15 @@ export function ModelDetailScreen() {
   const handleSave = async () => {
     if (!model) return;
     setSaving(true);
-    setSaveError(false);
+    setSaveError(null);
     try {
       const updated = await updateModelParams(model.id, draftLaunch, draftSampling);
       setSavedLaunch(updated.launch_params);
       setSavedSampling(updated.sampling_defaults);
       setJustSaved(true);
       setServerState(await getServerState());
-    } catch {
-      setSaveError(true);
+    } catch (err: unknown) {
+      setSaveError(describeError(err));
     } finally {
       setSaving(false);
     }
@@ -337,7 +485,16 @@ export function ModelDetailScreen() {
         <a href="#/models" className="text-xs text-accent hover:text-accent-hover">
           {strings.screens.modelDetail.backToModels}
         </a>
-        <h1 className="text-xl font-semibold text-foreground">{model.display_name}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-xl font-semibold text-foreground">{model.display_name}</h1>
+          {/* T-036: the role comes from the header, never from the filename. */}
+          {model.metadata.has_mtp_heads && (
+            <Badge variant="info">{strings.screens.modelDetail.launch.mtpBadge}</Badge>
+          )}
+          {draftCompanionPath !== null && (
+            <Badge variant="info">{strings.screens.modelDetail.launch.draftBadge}</Badge>
+          )}
+        </div>
         <p className="text-xs text-muted-foreground break-all">{model.file_path}</p>
       </header>
 
@@ -460,9 +617,9 @@ export function ModelDetailScreen() {
               {strings.screens.modelDetail.launch.saved}
             </div>
           )}
-          {saveError && (
+          {saveError !== null && (
             <div className="rounded-md border border-destructive bg-destructive/10 px-4 py-2 text-sm text-destructive">
-              {strings.screens.modelDetail.error}
+              {`${strings.screens.modelDetail.error} ${saveError}`}
             </div>
           )}
 
@@ -656,31 +813,157 @@ export function ModelDetailScreen() {
               </span>
             </label>
 
-            <button
-              className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover disabled:opacity-50"
-              onClick={handleSave}
-              disabled={saving}
-            >
-              {strings.screens.modelDetail.launch.save}
-            </button>
+          {/* T-036: speculative decoding — the model's role, and the draft
+              companion that changes it. The tuning controls are shown for any
+              model with a draft stage: its own MTP heads, a validated
+              companion, or both. */}
+          <div className="flex flex-col gap-3 border-t border-border pt-4">
+            <span className="text-xs font-semibold text-foreground">
+              {strings.screens.modelDetail.launch.speculativeTitle}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {model.metadata.has_mtp_heads
+                ? strings.screens.modelDetail.launch.speculativeMtpNote
+                : strings.screens.modelDetail.launch.speculativeNoneNote}
+            </p>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {strings.screens.modelDetail.launch.draftLabel}
+              </span>
+              <span className="text-xs text-foreground break-all">
+                {draftCompanionPath ?? strings.screens.modelDetail.launch.draftNone}
+              </span>
+              <button
+                className="rounded-md border border-border bg-surface-hover px-3 py-1 text-xs font-medium text-foreground disabled:opacity-50"
+                onClick={chooseDraftCompanion}
+                disabled={pickingDraft}
+              >
+                {draftCompanionPath === null
+                  ? strings.screens.modelDetail.launch.draftChoose
+                  : strings.screens.modelDetail.launch.draftReplace}
+              </button>
+              {draftCompanionPath !== null && (
+                <button
+                  className="rounded-md border border-border bg-surface-hover px-3 py-1 text-xs font-medium text-foreground"
+                  onClick={removeDraftCompanion}
+                >
+                  {strings.screens.modelDetail.launch.draftRemove}
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {strings.screens.modelDetail.launch.draftHint}
+            </p>
+
+            {companionInfo && (
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-foreground">
+                <span>
+                  {`${strings.screens.modelDetail.launch.draftArchitectureLabel}: ${companionInfo.architecture}`}
+                </span>
+                <span>
+                  {`${strings.screens.modelDetail.launch.speculativeExplicitType}: ${companionInfo.spec_type}`}
+                </span>
+                <span>
+                  {`${strings.screens.modelDetail.launch.draftSizeLabel}: ${formatBytes(companionInfo.size_bytes)}`}
+                </span>
+              </div>
+            )}
+
+            {companionError !== null && (
+              <p className="text-xs text-destructive">
+                {`${strings.screens.modelDetail.launch.draftValidationFailed} ${companionError}`}
+              </p>
+            )}
+
+            {(model.metadata.has_mtp_heads || companionInfo !== null) && (
+              <div className="flex flex-col gap-3 border-t border-border pt-3">
+                <span className="text-xs font-medium text-foreground">
+                  {strings.screens.modelDetail.launch.draftTuningTitle}
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  {draftCompanionPath === null
+                    ? strings.screens.modelDetail.launch.draftTuningMtpNote
+                    : strings.screens.modelDetail.launch.draftTuningNote}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  {numberField(
+                    strings.screens.modelDetail.launch.draftNMax,
+                    speculative?.n_max ?? null,
+                    (v) => updateSpeculative({ n_max: v }),
+                  )}
+                  {numberField(
+                    strings.screens.modelDetail.launch.draftNMin,
+                    speculative?.n_min ?? null,
+                    (v) => updateSpeculative({ n_min: v }),
+                  )}
+                  {numberField(
+                    strings.screens.modelDetail.launch.draftPMin,
+                    speculative?.p_min ?? null,
+                    (v) => updateSpeculative({ p_min: v }),
+                    0.01,
+                  )}
+                  {numberField(
+                    strings.screens.modelDetail.launch.draftThreads,
+                    speculative?.threads ?? null,
+                    (v) => updateSpeculative({ threads: v }),
+                  )}
+                  {selectField(
+                    strings.screens.modelDetail.launch.draftCacheTypeK,
+                    speculative?.cache_type_k ?? "",
+                    CACHE_TYPE_OPTIONS,
+                    (value) => updateSpeculative({ cache_type_k: value === "" ? null : value }),
+                  )}
+                  {selectField(
+                    strings.screens.modelDetail.launch.draftCacheTypeV,
+                    speculative?.cache_type_v ?? "",
+                    CACHE_TYPE_OPTIONS,
+                    (value) => updateSpeculative({ cache_type_v: value === "" ? null : value }),
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {strings.screens.modelDetail.launch.draftTuningHint}
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* Live preset preview — produced by the T-033 code path. */}
-          <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-4">
+          {/* Live preset preview — produced by the T-033 code path. It shows
+              the section written for this model in the preset file, which is
+              what the label says; the router command line is assembled at
+              server start (T-040), so it cannot be shown here yet. */}
+          <div className="flex flex-col gap-2 border-t border-border pt-4">
             <span className="text-xs font-semibold text-foreground">
               {strings.screens.modelDetail.launch.previewTitle}
             </span>
+            <p className="text-xs text-muted-foreground">
+              {strings.screens.modelDetail.launch.previewExplain}
+            </p>
             {preview !== null ? (
               <pre className="max-h-64 overflow-auto rounded-md border border-border bg-input p-3 text-xs text-foreground">
                 {preview}
               </pre>
             ) : previewError !== null ? (
-              <p className="text-xs text-muted-foreground">
-                {strings.screens.modelDetail.launch.previewEmpty}
+              // The reason is the backend's, never an assumed one: the old copy
+              // blamed "no active build" for every failure it could not name.
+              <p className="text-xs text-warn">
+                {strings.screens.modelDetail.launch.previewError} {previewError}
               </p>
             ) : (
               <Loading label={strings.screens.modelDetail.launch.previewTitle} size="sm" />
             )}
+          </div>
+
+          {/* The parameters card closes after the Save button: speculative
+              decoding and the command preview are part of the same form, and
+              saving them is one action (owner, 14 Sept 2026). */}
+          <button
+            className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent-hover disabled:opacity-50"
+            onClick={handleSave}
+            disabled={saving}
+          >
+            {strings.screens.modelDetail.launch.save}
+          </button>
           </div>
         </div>
       )}

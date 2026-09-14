@@ -51,6 +51,14 @@ One change in v6.4:
 |---|---|---|
 | — | **T-036** speculative decoding (MTP and draft models) | new: owner-commissioned on 11 Sept 2026 while implementing T-035 — draft-architecture files (DFlash, DSpark, EAGLE) must not enter the catalogue as launchable models, and MTP models must be launchable with `--spec-type draft-mtp` |
 
+One change in v6.5:
+
+| v6.4 | v6.5 | |
+|---|---|---|
+| — | **T-037** model capability tags | new: owner-commissioned on 14 Sept 2026 during T-036 testing — the list's always-true badges carry no information |
+| — | **T-038** KV-cache accuracy and speculative memory accounting | new: same session — the projection read too large and omitted the draft model |
+| — | **T-039** registration channel from the observed interface | new: same session — D-015; the help text cannot answer the question and the stored `Undetermined` blocks every preset |
+
 ---
 
 ## Milestone A — Skeleton
@@ -280,6 +288,50 @@ The GGUF reader (T-030) exposes both signals: `is_draft_model` (architecture-bas
 - **A main+draft pair is expressible**: the launch parameters for a model carry an optional draft-companion reference (path of a draft-architecture file on disk). The preset generator emits `--model-draft` naming it, plus any verified draft tuning flags the user set. The companion is validated: it must exist, parse as GGUF, and carry a draft architecture — each failure is a typed error naming the file, not a warning.
 - **The UI surfaces the role**: the model detail screen (T-035) shows an MTP badge when `has_mtp_heads` is true, and offers a draft-companion picker (file picker restricted to parseable draft-architecture GGUFs) for models that support an external draft model. Draft-architecture files are not shown as launchable in the catalogue list.
 - **No regression for ordinary models**: a model with neither signal emits no speculative flags at all — the generated preset is byte-identical to the pre-task output for such a model, asserted by a snapshot diff.
+
+---
+
+### T-037 — Model capability tags `[dep: T-030, T-034, T-036]`
+Show what a model can actually do — **Thinking**, **MTP**, **Vision**, **Tool use** — read from the model itself, in the models list and on the detail screen.
+
+Today the list leads with two badges that are true of almost every entry (`Supported`, `Present`) and says nothing about capability; T-036 put MTP on the detail screen only. The two always-true badges go away.
+
+*Acceptance:*
+- **Every tag is header-derived, never name-derived.** A file whose name announces a capability it does not have, and one whose name hides a capability it does have, both classify by the header. One synthetic fixture per capability where name and header disagree.
+- **MTP** is `{arch}.nextn_predict_layers` (T-036). **Vision** is the presence of the model's projector in its own file set (T-031's directory-based association / `mmproj_path`), not an architecture whitelist. **Thinking** and **Tool use** must come from the GGUF's own metadata: if the header cannot answer for a given writer, the tag is omitted rather than guessed; if it answers *no*, there is no tag. The key that answers each question is recorded in Facts established together with the file it was read from — no key is written into the code from memory.
+- A model with none of the four capabilities renders **no tag row at all** — not an empty row, not placeholders.
+- The tags occupy **one row spanning the model card's width**, positioned **above the model's own text** (owner decision, 14 Sept 2026) — not in the metadata line shared with the compatibility/availability badges.
+- The always-true badges stop rendering: `Supported` and `Present` disappear from the list. Their informative cases are untouched — `Warnings`, `Experimental`, `Unsupported`, `Missing`, `Unreadable` render exactly as they do today.
+- "Cannot be determined" is visually distinguishable from "absent" (no tag vs. an explicit unknown state). One of the two is chosen and asserted; leaving the distinction undefined is the failure this criterion exists to prevent.
+
+---
+
+### T-038 — KV-cache accuracy and speculative-decoding memory accounting `[dep: T-030, T-032, T-036]`
+Two defects in the same term of the estimate. The KV cache is computed from metadata that is `None` because the reader looks for keys the files do not carry, and the memory a speculative-decoding configuration adds — the draft model, or the MTP heads' own layer — is not counted at all.
+
+**Evidence (T-036 session, the owner's real files):**
+- All three catalogue rows carry `embedding_length: None`, `attention_head_count: None`, `attention_head_count_kv: None`. `core/gguf.rs` reads `llama.embedding_length` / `llama.attention.head_count(_kv)` with a bare-name fallback, while these files declare `general.architecture = qwen35` — the same arch-prefix bug F-013 fixed for `{arch}.block_count`, still present on these three keys. With the head counts missing, the KV term falls back to a per-architecture default instead of the model's own GQA ratio, and the owner reports the projection reads **too large**.
+- `estimate_vram` adds the projector's file size but nothing for the draft companion (`SpeculativeParams::draft_companion`, T-036), so a main+draft configuration reads "fits fully in VRAM" with the companion unaccounted for. A model drafting with its own MTP heads has the mirror-image gap: its extra MTP layer is not modelled either.
+
+*Acceptance:*
+- The reader returns those three fields for a real file whose architecture is not `llama`: asserted against a synthetic fixture carrying `{arch}.embedding_length` / `{arch}.attention.head_count` / `{arch}.attention.head_count_kv`, and against the owner's real GGUF when `LLAMA_MANAGER_REAL_GGUF` is set.
+- The KV-cache term of a GQA model uses `attention_head_count_kv`, never `attention_head_count` — asserted term-by-term against a hand-computed value for a model with an 8:1 ratio, and the two cache types are priced independently (T-035's fix, kept).
+- A configuration with a draft companion includes the companion's weights in the estimate; a model with MTP heads names the MTP cost in `notes`. An unquantified draft term must not be silently zero.
+- `recommended_gpu_layers` never recommends a layer count that stops fitting once the draft term is included.
+- The existing `insta` snapshots are re-accepted **deliberately** — the diff is reviewed line by line and each change is explained in the PR body, never blind-accepted.
+
+---
+
+### T-039 — Registration channel from the observed interface, not the help text `[dep: T-023, T-025]`
+`core::flag_verify` derives `RuntimeBuild.registration_channel` from what the `--help` text answers. The help text cannot answer: it says nothing about whether `--models-preset` registers a model by absolute path, so every build a fresh install verifies is stored as `Undetermined` — and `generate_preset` refuses on `Undetermined` by design. The channel has been **observed** since T-025: `PresetDeclaresPath` (F-011/F-012), and T-033 already states the observation overrides the help reading. The code that writes the value never learned that.
+
+**Evidence (D-015, 14 Sept 2026):** both stored builds (b9196, b10883) carry `registration_channel = Undetermined`; `preview_preset` refuses with `Internal { "registration channel is Undetermined; cannot preview preset" }`; T-040 would hit the same refusal at server start.
+
+*Acceptance:*
+- A build whose `--help` is silent on the preset question is stored as the **observed** channel (`PresetDeclaresPath`), not `Undetermined`. `Undetermined` remains a real value, reachable only when the help is silent **and** no observation binds — which, after T-025, is none of the interfaces this project supports. A test drives the derivation with a real help capture whose text is silent and asserts the stored channel is the observed one.
+- The repair covers **rows already stored**: a build read back with `registration_channel = Undetermined` is re-derived on read (or corrected once in `verify_runtime_on`), so the installed b10883 becomes usable without an uninstall/reinstall. A test asserts the read-back path repairs the stored row.
+- `preset_generator`'s `Undetermined` refusal is **kept** — it is the dead-man's switch for an interface nobody has probed. Its error message names the repair instead of only the refusal.
+- The `--help`-derived derivation stays where it is for everything it does answer (health endpoint, verified flags); only the channel question changes hands.
 
 ---
 

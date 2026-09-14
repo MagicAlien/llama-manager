@@ -467,6 +467,19 @@ pub fn preview_preset(id: String) -> Result<String, AppError> {
     preset_generator::preview_preset(&model, &build)
 }
 
+/// T-036: validate a candidate draft companion before it is saved.
+///
+/// The draft-companion picker runs this on every candidate, so an unusable
+/// file is rejected while the user is still looking at the picker instead of
+/// at save time. The write path (`update_model_params`) and the preset
+/// generator call the same core function, so the three can never disagree.
+#[tauri::command]
+pub fn validate_draft_companion(
+    path: String,
+) -> Result<crate::core::speculative::DraftCompanionInfo, AppError> {
+    crate::core::speculative::validate_draft_companion(std::path::Path::new(&path))
+}
+
 /// T-035: live preset preview for DRAFT (unsaved) launch params.
 ///
 /// The model-detail screen's preview must track the layer-budget slider and

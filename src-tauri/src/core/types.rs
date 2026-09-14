@@ -436,6 +436,40 @@ pub enum FlashAttn {
     Auto,
 }
 
+/// T-036 — the speculative-decoding configuration of one model.
+///
+/// A model drafts in one of two ways, and this struct holds both:
+///
+/// - **with its own MTP heads** (`GgufMetadata::has_mtp_heads`): no companion
+///   file, `--spec-type draft-mtp`, and only the tuning fields apply;
+/// - **with a draft companion**: a small model that is never
+///   standalone-launchable, named by `draft_companion`, driving the
+///   `--spec-type` its architecture maps to.
+///
+/// The tuning fields mean the same thing in both cases — they tune the draft
+/// stage (`--spec-draft-*`) — which is why they are not nested under the
+/// companion. An unset field leaves the build's own default in place.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
+#[ts(export)]
+pub struct SpeculativeParams {
+    /// Absolute path of a draft-architecture GGUF on disk, or `None` for a
+    /// model that drafts with its own MTP heads. Validated before it is ever
+    /// persisted (`core::speculative::validate_draft_companion`).
+    pub draft_companion: Option<PathBuf>,
+    /// `--spec-draft-n-max`
+    pub n_max: Option<u32>,
+    /// `--spec-draft-n-min`
+    pub n_min: Option<u32>,
+    /// `--spec-draft-p-min`
+    pub p_min: Option<f32>,
+    /// `--spec-draft-threads`
+    pub threads: Option<u32>,
+    /// `--spec-draft-type-k`
+    pub cache_type_k: Option<String>,
+    /// `--spec-draft-type-v`
+    pub cache_type_v: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, TS)]
 #[ts(export)]
 pub struct LaunchParams {
@@ -454,6 +488,12 @@ pub struct LaunchParams {
     pub threads: Option<u32>,
     pub chat_template: Option<String>,
     pub mmproj_path: Option<PathBuf>,
+    /// T-036 — how this model drafts tokens. `None` means it launches without
+    /// speculative decoding; `Some` covers both a model drafting with its own
+    /// MTP heads and one driving a draft companion.
+    /// `#[serde(default)]` keeps DB rows written before T-036 deserializable.
+    #[serde(default)]
+    pub speculative: Option<SpeculativeParams>,
     /// Unvalidated passthrough. User-entered only — never set by app logic.
     /// See `AGENTS.md` §1.
     pub extra_args: Vec<String>,

@@ -44,6 +44,11 @@ fn generate_default_launch_params(block_count: u32) -> LaunchParams {
         threads: Some(threads),
         chat_template: None, // Auto-detected from GGUF by llama.cpp
         mmproj_path: None,
+        // T-036: a freshly imported model carries no speculative-decoding
+        // configuration. An MTP model still drafts with its own heads —
+        // `spec_type_for_entry` derives that from the header, so nothing has
+        // to be written here for it to work.
+        speculative: None,
         extra_args: vec![],
     }
 }
@@ -445,6 +450,12 @@ pub fn update_model_params(
     launch_params: &LaunchParams,
     sampling_defaults: &SamplingDefaults,
 ) -> Result<ModelEntry, AppError> {
+    // T-036: a draft companion is validated BEFORE it is persisted — it must
+    // exist, parse as GGUF, and carry a draft architecture. Each failure is a
+    // typed error naming the file (docs/TASKS.md T-036), so a bad path can
+    // never reach the database and be discovered at server start instead.
+    crate::core::speculative::validate_companion_of(launch_params)?;
+
     let conn = open_db()?;
     let launch_params_json =
         serde_json::to_string(launch_params).map_err(|e| AppError::Internal {
