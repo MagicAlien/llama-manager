@@ -21,7 +21,7 @@ Next candidate: T-036 (Speculative decoding — MTP and draft models), opened 11
 
 ## In progress
 
-*14 Sept 2026 — `t-036-speculative-decoding` branch (LOCAL ONLY: created, no commit, not pushed — the owner gates commits). T-036's launch/UI half implemented, plus the empirical discovery that the preset INI channel had never been exercised against a real binary (D-014/F-015). **No PR opened.***
+*14 Sept 2026 — `t-036-speculative-decoding` branch, **PR #30 opened** (base `main`, single commit `4e392f9`, in review). T-036's launch/UI half implemented, plus the empirical discovery that the preset INI channel had never been exercised against a real binary (D-014/F-015). Done accounting deferred to merge; task NOT marked Done.*
 
 T-036's acceptance bullets and where each stands:
 
