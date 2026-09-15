@@ -108,21 +108,25 @@ afterEach(() => {
 
 describe("ModelDetailScreen — T-036 speculative decoding", () => {
   it("shows the backend's reason when the preset preview is refused", async () => {
-    // The real case in this repo: the build's registration channel is
-    // `Undetermined`, so the generator refuses. The screen must say so, not
-    // "[object Object]" and not an invented cause (D-015).
+    // The real case in this repo: a build whose `--help` offers no
+    // `--models-preset` has no registration channel, so the generator refuses
+    // (T-039 keeps that refusal as the dead-man's switch). The screen must say
+    // so, not "[object Object]" and not an invented cause (D-015).
     const ipc = await import("@/lib/ipc");
     (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
     (ipc.previewPresetParams as ReturnType<typeof vi.fn>).mockRejectedValue({
       kind: "Internal",
-      detail: { message: "registration channel is Undetermined; cannot preview preset" },
+      detail: {
+        message:
+          "this build's registration channel is not established: its --help does not settle how a model enters the router, and no preset interface was observed for it. Install or activate a build that lists --models-preset (re-verify this one if it does), then try again. No preset was written to disk.",
+      },
     });
 
     render(<ModelDetailScreen />);
 
     expect(
       await screen.findByText(
-        /Preset preview unavailable: registration channel is Undetermined/,
+        /Preset preview unavailable: this build's registration channel is not established/,
       ),
     ).toBeTruthy();
   });

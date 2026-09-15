@@ -560,6 +560,33 @@ pub fn update_runtime_verification(
     Ok(())
 }
 
+/// T-039 — set only `runtimes.registration_channel`, leaving the verified flag
+/// list untouched. Used by the one-off repair of rows written before the
+/// observed channel was recorded (`installer::repair_registration_channels_on`),
+/// which must not rewrite a 26 KB flag payload to change one string.
+///
+/// Addressed by (build_tag, backend) like the other runtime writes; a missing
+/// row is a `NotFound`, not a silent no-op.
+pub fn set_runtime_registration_channel(
+    conn: &rusqlite::Connection,
+    build_tag: &str,
+    backend: &Backend,
+    registration_channel: &str,
+) -> Result<(), AppError> {
+    let changed = conn
+        .execute(
+            "UPDATE runtimes SET registration_channel = ?1 WHERE build_tag = ?2 AND backend = ?3",
+            params![registration_channel, build_tag, backend.to_string()],
+        )
+        .map_err(db_err)?;
+    if changed == 0 {
+        return Err(AppError::NotFound {
+            what: format!("runtime {build_tag}/{backend}"),
+        });
+    }
+    Ok(())
+}
+
 // ─── settings ───────────────────────────────────────────────────
 
 /// `key -> value` upsert. Covers both "create" (key did not exist) and

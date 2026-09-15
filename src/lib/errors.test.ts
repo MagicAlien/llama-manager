@@ -11,11 +11,9 @@ describe("describeError", () => {
   it("reads the message out of the serialized AppError", () => {
     const rejection = {
       kind: "Internal",
-      detail: { message: "registration channel is Undetermined; cannot preview preset" },
+      detail: { message: "could not determine the database path" },
     };
-    expect(describeError(rejection)).toBe(
-      "registration channel is Undetermined; cannot preview preset",
-    );
+    expect(describeError(rejection)).toBe("could not determine the database path");
   });
 
   it("describes variants that carry no message", () => {

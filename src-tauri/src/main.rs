@@ -86,6 +86,18 @@ fn main() {
 
     tracing::info!("llama-manager starting");
 
+    // T-039 — correct `runtimes` rows written before the observed registration
+    // channel was recorded, so an installed build becomes usable without a
+    // reinstall. Best-effort: a database that cannot be opened is a problem for
+    // the screens that need it, never a reason to refuse to launch.
+    match crate::core::installer::repair_registration_channels() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("corrected the registration channel of {n} installed build(s)"),
+        Err(err) => {
+            tracing::warn!("could not check the installed builds' registration channels: {err}")
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![

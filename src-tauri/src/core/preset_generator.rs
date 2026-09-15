@@ -62,6 +62,34 @@ pub struct PresetPlan {
     pub warnings: Vec<PresetWarning>,
 }
 
+/// The refusal for a build whose registration channel is not established — the
+/// dead-man's switch T-039 deliberately keeps.
+///
+/// Guessing a channel is not a safe default in either direction: emit
+/// `model = <path>` on a `ScanOnly` build and nothing registers, emit nothing on
+/// a `PresetDeclaresPath` build and the server serves an empty catalogue — and
+/// after F-015 a wrong key is fatal for the whole server, not for one model. So
+/// the generation stops.
+///
+/// The message names the **repair**, because after T-039 this value is only
+/// reachable for a build whose verified flags offer no `--models-preset` at all:
+/// every build that offers it is stored with the channel the empirical probe
+/// observed (PROGRESS.md F-011/F-012), and a build already installed needs no
+/// reinstall to pick that up. Nothing about *this* build is fixable by the user,
+/// so the copy points at the thing that is. `consequence` closes the message
+/// with what the refusal means for the operation that asked — the caller's own
+/// sentence, because the same precondition refuses three different operations.
+fn channel_not_established(consequence: &str) -> AppError {
+    AppError::Internal {
+        message: format!(
+            "this build's registration channel is not established: its --help does not settle \
+             how a model enters the router, and no preset interface was observed for it. Install \
+             or activate a build that lists --models-preset (re-verify this one if it does), \
+             then try again. {consequence}"
+        ),
+    }
+}
+
 /// Generate the `presets.ini` content for the given active build and models.
 #[allow(dead_code)]
 pub fn generate_preset(build: &RuntimeBuild, models: &[ModelEntry]) -> Result<String, AppError> {
@@ -74,11 +102,9 @@ pub fn preset_plan(build: &RuntimeBuild, models: &[ModelEntry]) -> Result<Preset
     match build.registration_channel {
         RegistrationChannel::PresetDeclaresPath => render_plan(build, models, true),
         RegistrationChannel::ScanOnly => render_plan(build, models, false),
-        RegistrationChannel::Undetermined => Err(AppError::Internal {
-            message: "registration channel is Undetermined; T-025 did not resolve it. \
-                     Cannot generate preset without knowing the channel."
-                .to_string(),
-        }),
+        RegistrationChannel::Undetermined => {
+            Err(channel_not_established("No preset was generated."))
+        }
     }
 }
 
@@ -119,9 +145,9 @@ pub fn preview_preset_plan(
             render_plan(build, std::slice::from_ref(model), true)
         }
         RegistrationChannel::ScanOnly => render_plan(build, std::slice::from_ref(model), false),
-        RegistrationChannel::Undetermined => Err(AppError::Internal {
-            message: "registration channel is Undetermined; cannot preview preset".to_string(),
-        }),
+        RegistrationChannel::Undetermined => {
+            Err(channel_not_established("No preset was written to disk."))
+        }
     }
 }
 
@@ -340,10 +366,9 @@ pub fn router_arguments(
             args.push(path.to_string_lossy().to_string());
         }
         RegistrationChannel::Undetermined => {
-            return Err(AppError::Internal {
-                message: "registration channel is Undetermined; cannot generate router arguments"
-                    .to_string(),
-            });
+            return Err(channel_not_established(
+                "No command line was produced, so the server was not started.",
+            ));
         }
     }
 
@@ -509,9 +534,42 @@ mod tests {
         let err = result.unwrap_err();
         match err {
             AppError::Internal { message } => {
-                assert!(message.contains("Undetermined"));
+                // The refusal is kept — it is the dead-man's switch for an
+                // interface nobody has probed — and the copy names the repair
+                // (T-039), because after this task an `Undetermined` build is
+                // one whose --help offers no `--models-preset` at all: nothing
+                // about that build is fixable by the user.
+                assert!(message.contains("--models-preset"), "{message}");
+                assert!(message.contains("Install or activate"), "{message}");
+                assert!(message.contains("No preset was generated."), "{message}");
             }
             _ => panic!("expected Internal error"),
+        }
+    }
+
+    /// Every refusal site names the same repair (T-039): one helper, three
+    /// callers — a preset, a preview and the router command line all stop on the
+    /// same missing precondition and say the same thing about it.
+    #[test]
+    fn every_undetermined_refusal_names_the_repair() {
+        let build = test_build(RegistrationChannel::Undetermined);
+        let model = test_model("1", "/models/model-1.gguf");
+
+        let preview = preview_preset(&model, &build).unwrap_err();
+        let args = router_arguments(
+            &build,
+            8080,
+            Some(PathBuf::from("/path/to/presets.ini").as_path()),
+            None,
+        )
+        .unwrap_err();
+
+        for (what, err) in [("preview", &preview), ("router arguments", &args)] {
+            let AppError::Internal { message } = err else {
+                panic!("{what} must refuse with Internal, got {err:?}");
+            };
+            assert!(message.contains("--models-preset"), "{what}: {message}");
+            assert!(message.contains("Install or activate"), "{what}: {message}");
         }
     }
 
