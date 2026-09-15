@@ -96,7 +96,7 @@ use std::time::Instant;
 use chrono::Utc;
 use rusqlite::Connection;
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::{info, warn};
 use zip::ZipArchive;
 
 use crate::core::flag_verify;
@@ -106,7 +106,8 @@ use crate::core::types::{
     VerifiedFlag,
 };
 use crate::db::queries::{
-    delete_runtime, get_runtime, insert_runtime, update_runtime_verification, RuntimeRow,
+    delete_runtime, get_runtime, insert_runtime, set_runtime_registration_channel,
+    update_runtime_verification, RuntimeRow,
 };
 
 /// The app's data root: `%LOCALAPPDATA%\LlamaManager`. T-001 already creates
@@ -588,7 +589,15 @@ pub fn verify_runtime_on(
     }
 
     let health_endpoint = flag_verify::health_endpoint_from_help(&help);
-    let channel = flag_verify::registration_channel_from_help(&help);
+    // T-039: the help text cannot answer the preset question, so what gets
+    // stored is the *binding* channel — the help reading where it answers, the
+    // observed interface (T-025, F-011/F-012) everywhere else. Storing
+    // `registration_channel_from_help`'s result directly is what made every
+    // fresh install unusable for presets (D-015).
+    let channel = flag_verify::binding_registration_channel(
+        flag_verify::registration_channel_from_help(&help),
+        &parsed.flags,
+    );
 
     // Store the verified flag list and the health endpoint as one object
     // (the column's default stays the honest unverified value, `[]`).
@@ -619,6 +628,13 @@ pub fn verify_runtime_on(
 /// `registration_channel` string maps onto the enum by variant name; any
 /// unrecognized value degrades to `Undetermined` with a warning rather than
 /// guessing.
+///
+/// **The read path repairs what pre-T-039 writes stored** (T-039): a row whose
+/// column says `Undetermined` resolves through [`channel_from_stored`] to the
+/// channel the build's own verified flag list supports, so a build installed by
+/// the old derivation becomes usable without a reinstall. The stored string is
+/// not rewritten here — reading must not write; the durable correction is
+/// [`repair_registration_channels_on`], run once at startup.
 pub fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
     // `verified_flags_json` is `{"flags":[...],"health_endpoint":"/props"}`
     // once T-023 has verified the build. A row at the schema default (`"[]"`)
@@ -626,6 +642,7 @@ pub fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
     // corrupt value degrades the same way. T-040 treats a missing endpoint as
     // "not yet verified" and must not guess.
     let (verified_flags, health_endpoint) = decode_verified_payload(&row.verified_flags_json);
+    let registration_channel = channel_from_stored(&row.registration_channel, &verified_flags);
     RuntimeBuild {
         build_tag: row.build_tag.clone(),
         backend: row.backend.clone(),
@@ -634,7 +651,7 @@ pub fn row_to_build(row: &RuntimeRow) -> RuntimeBuild {
         installed_at: row.installed_at,
         verified_flags,
         health_endpoint,
-        registration_channel: channel_from_stored(&row.registration_channel),
+        registration_channel,
     }
 }
 
@@ -663,18 +680,87 @@ pub fn decode_verified_payload(raw: &str) -> (Vec<VerifiedFlag>, Option<String>)
     (Vec::new(), None)
 }
 
-fn channel_from_stored(raw: &str) -> RegistrationChannel {
+/// The stored `runtimes.registration_channel` string as a value, with T-039's
+/// repair applied to the one value pre-T-039 code wrote.
+///
+/// `"Undetermined"` was the old derivation's answer for every build (the help
+/// text cannot settle the question), so reading it back resolves through
+/// [`flag_verify::binding_registration_channel`] against the same row's verified
+/// flag list: a build that offers `--models-preset` now reads as the channel
+/// T-025 observed, without a reinstall. A build whose stored flags offer no
+/// preset interface keeps `Undetermined` — nothing observed that interface, and
+/// `docs/TASKS.md` T-039 keeps that value real for exactly this case.
+///
+/// An **unrecognized** string is still a warning and `Undetermined`: the row was
+/// written by something this code does not understand, and silently upgrading it
+/// to the observed channel would convert a data anomaly into a plausible-looking
+/// answer.
+fn channel_from_stored(raw: &str, verified_flags: &[VerifiedFlag]) -> RegistrationChannel {
     match raw {
         "PresetDeclaresPath" => RegistrationChannel::PresetDeclaresPath,
         "ScanOnly" => RegistrationChannel::ScanOnly,
-        // "Undetermined" and anything unrecognized: the enum's own default.
+        "Undetermined" => flag_verify::binding_registration_channel(
+            RegistrationChannel::Undetermined,
+            verified_flags,
+        ),
         _ => {
-            if raw != "Undetermined" {
-                warn!("unrecognized stored registration channel {raw:?}; treating as Undetermined");
-            }
+            warn!("unrecognized stored registration channel {raw:?}; treating as Undetermined");
             RegistrationChannel::Undetermined
         }
     }
+}
+
+/// T-039 — correct the `runtimes` rows written before the observed registration
+/// channel was recorded, so an installed build needs no reinstall to become
+/// usable and the stored column stops contradicting what the app believes.
+///
+/// Every row is resolved exactly as the read path resolves it
+/// ([`channel_from_stored`] over the row's own verified flag list) and is
+/// written **only when that differs from the stored string**. That makes the
+/// function idempotent (a second run corrects nothing) and behaviour-neutral:
+/// the value it writes is the value [`row_to_build`] already returns. A row with
+/// no preset interface, or with an unrecognized string, is left untouched.
+///
+/// Returns how many rows were corrected.
+pub fn repair_registration_channels_on(conn: &Connection) -> Result<u32, AppError> {
+    let rows = crate::db::queries::list_runtimes(conn)?;
+    let mut corrected = 0u32;
+    for row in &rows {
+        let (verified_flags, _endpoint) = decode_verified_payload(&row.verified_flags_json);
+        let resolved = channel_from_stored(&row.registration_channel, &verified_flags);
+        let name = channel_name(&resolved);
+        if name == row.registration_channel {
+            continue;
+        }
+        set_runtime_registration_channel(conn, &row.build_tag, &row.backend, &name)?;
+        info!(
+            "corrected stored registration channel for {}/{}: {} -> {}",
+            row.build_tag, row.backend, row.registration_channel, name
+        );
+        corrected += 1;
+    }
+    Ok(corrected)
+}
+
+/// The startup entry point for [`repair_registration_channels_on`]: resolves the
+/// database path, ensures the directory exists (the database is created on first
+/// open, and `db::open` cannot create its own parent), opens the database and
+/// runs the repair.
+///
+/// **Best-effort by design.** The caller logs a failure and starts anyway: a
+/// database that cannot be opened is a problem for the screens that need it, and
+/// never a reason to refuse to launch.
+pub fn repair_registration_channels() -> Result<u32, AppError> {
+    let db_path = database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    if let Some(dir) = db_path.parent() {
+        if !dir.exists() {
+            std::fs::create_dir_all(dir).map_err(io_err)?;
+        }
+    }
+    let conn = crate::db::open(&db_path)?;
+    repair_registration_channels_on(&conn)
 }
 
 /// The variant name of a [`RegistrationChannel`], for storage in
@@ -1533,6 +1619,193 @@ mod tests {
         assert_eq!(
             row_to_build(&unknown).registration_channel,
             RegistrationChannel::Undetermined
+        );
+    }
+
+    // ── T-039: the observed channel is what is stored and read back ─────
+
+    /// A `verified_flags_json` payload holding exactly `names`, in the shape
+    /// T-023 stores (flags + health endpoint in one object).
+    fn flags_payload(names: &[&str]) -> String {
+        let flags: Vec<VerifiedFlag> = names
+            .iter()
+            .map(|name| VerifiedFlag {
+                name: (*name).to_string(),
+                takes_value: true,
+                allowed_values: None,
+            })
+            .collect();
+        serde_json::json!({ "flags": flags, "health_endpoint": "/props" }).to_string()
+    }
+
+    fn runtime_row(tag: &str, channel: &str, flags: &[&str]) -> RuntimeRow {
+        RuntimeRow {
+            build_tag: tag.to_string(),
+            backend: backend(),
+            install_path: format!(
+                "C:/Users/test/AppData/Local/LlamaManager/runtimes/{tag}-cuda_13"
+            ),
+            is_active: false,
+            installed_at: "2026-09-14T09:00:00Z".parse().unwrap(),
+            verified_flags_json: flags_payload(flags),
+            registration_channel: channel.to_string(),
+        }
+    }
+
+    /// The exact shape the installed b10883 row has after T-023 wrote it: a
+    /// build that lists `--models-preset` and is stored as `Undetermined`
+    /// because the help text could not answer (D-015). The read path must serve
+    /// the observed channel, which is what makes the preset preview and, later,
+    /// the server start work without a reinstall.
+    #[test]
+    fn a_row_stored_undetermined_reads_back_as_the_observed_channel() {
+        let row = runtime_row(
+            "b10883",
+            "Undetermined",
+            &["--port", "--models-preset", "--spec-type"],
+        );
+        let build = row_to_build(&row);
+        assert_eq!(
+            build.registration_channel,
+            RegistrationChannel::PresetDeclaresPath
+        );
+        assert_eq!(
+            build.verified_flags.len(),
+            3,
+            "the flags must survive the read"
+        );
+        assert_eq!(build.health_endpoint.as_deref(), Some("/props"));
+    }
+
+    /// The repair needs evidence, and a data anomaly is not evidence: a row with
+    /// no preset interface keeps `Undetermined`, an unrecognized string is never
+    /// upgraded, and a stored answer is passed through untouched.
+    #[test]
+    fn the_repair_only_touches_rows_the_build_evidence_supports() {
+        let no_interface = runtime_row("b5559", "Undetermined", &["--port", "--flash-attn"]);
+        assert_eq!(
+            row_to_build(&no_interface).registration_channel,
+            RegistrationChannel::Undetermined,
+            "no --models-preset means nothing observed this build's interface"
+        );
+
+        let garbage = runtime_row("b10883", "SomethingNew", &["--models-preset"]);
+        assert_eq!(
+            row_to_build(&garbage).registration_channel,
+            RegistrationChannel::Undetermined,
+            "an unrecognized stored string must not become a plausible answer"
+        );
+
+        let answered = runtime_row("b9196", "ScanOnly", &["--models-preset"]);
+        assert_eq!(
+            row_to_build(&answered).registration_channel,
+            RegistrationChannel::ScanOnly,
+            "a stored answer is authoritative"
+        );
+    }
+
+    #[test]
+    fn the_repair_corrects_legacy_rows_once_and_is_idempotent() {
+        let conn = db::open_in_memory().unwrap();
+        let legacy = runtime_row("b10883", "Undetermined", &["--models-preset"]);
+        let untouched = runtime_row("b5559", "Undetermined", &["--flash-attn"]);
+        insert_runtime(&conn, &legacy).unwrap();
+        insert_runtime(&conn, &untouched).unwrap();
+
+        assert_eq!(repair_registration_channels_on(&conn).unwrap(), 1);
+        let stored = get_runtime(&conn, "b10883", &backend()).unwrap().unwrap();
+        assert_eq!(stored.registration_channel, "PresetDeclaresPath");
+        assert_eq!(
+            stored.verified_flags_json, legacy.verified_flags_json,
+            "the repair changes the channel, never the flag payload"
+        );
+        assert_eq!(
+            get_runtime(&conn, "b5559", &backend())
+                .unwrap()
+                .unwrap()
+                .registration_channel,
+            "Undetermined"
+        );
+
+        // Second run: nothing left to correct, and the row now reads back as the
+        // value the read path was already returning.
+        assert_eq!(repair_registration_channels_on(&conn).unwrap(), 0);
+        assert_eq!(
+            row_to_build(&stored).registration_channel,
+            RegistrationChannel::PresetDeclaresPath
+        );
+    }
+
+    #[test]
+    fn the_repair_reports_an_unregistered_row_rather_than_inventing_one() {
+        // The write is addressed by (build_tag, backend): the repair walks rows
+        // it just read, so a missing row can only mean the table changed
+        // underneath it — a NotFound, never a silent no-op.
+        let conn = db::open_in_memory().unwrap();
+        assert!(matches!(
+            set_runtime_registration_channel(&conn, "b10883", &backend(), "PresetDeclaresPath"),
+            Err(AppError::NotFound { .. })
+        ));
+    }
+
+    /// Demonstrated, not asserted (T-039's first acceptance bullet): against a
+    /// real build, the channel that lands in the `runtimes` row is the observed
+    /// one — the help text of every build captured here is silent on the preset
+    /// question. Env-gated like T-036's real-binary test, because CI has no
+    /// llama.cpp binary: set `LLAMA_MANAGER_LLAMA_SERVER` to the
+    /// `llama-server.exe` of an installed build.
+    #[test]
+    fn a_real_build_is_stored_with_the_observed_channel() {
+        let Ok(exe) = std::env::var("LLAMA_MANAGER_LLAMA_SERVER") else {
+            eprintln!("skipping: set LLAMA_MANAGER_LLAMA_SERVER to a real llama-server.exe");
+            return;
+        };
+        let exe = PathBuf::from(exe);
+        let Some(dir) = exe.parent().map(Path::to_path_buf) else {
+            panic!("{} has no parent directory", exe.display());
+        };
+
+        let conn = db::open_in_memory().unwrap();
+        insert_runtime(
+            &conn,
+            &RuntimeRow {
+                build_tag: "b10883".to_string(),
+                backend: backend(),
+                install_path: dir.to_string_lossy().into_owned(),
+                is_active: false,
+                installed_at: "2026-09-14T09:00:00Z".parse().unwrap(),
+                verified_flags_json: "[]".to_string(),
+                registration_channel: "Undetermined".to_string(),
+            },
+        )
+        .unwrap();
+
+        let build = RuntimeBuild {
+            build_tag: "b10883".to_string(),
+            backend: backend(),
+            install_path: dir,
+            is_active: false,
+            installed_at: "2026-09-14T09:00:00Z".parse().unwrap(),
+            verified_flags: Vec::new(),
+            health_endpoint: None,
+            registration_channel: RegistrationChannel::Undetermined,
+        };
+        let verified = verify_runtime_on(&conn, &build).unwrap();
+        assert_eq!(
+            verified.registration_channel,
+            RegistrationChannel::PresetDeclaresPath,
+            "the returned build must carry the observed channel"
+        );
+
+        // …and so must the row, which is what every later read goes through.
+        let stored = get_runtime(&conn, "b10883", &backend()).unwrap().unwrap();
+        assert_eq!(
+            stored.registration_channel, "PresetDeclaresPath",
+            "the stored channel is the observed one, not the help text's silence"
+        );
+        assert!(
+            stored.verified_flags_json.contains("--models-preset"),
+            "the real build's verified flags must be stored alongside it"
         );
     }
 }

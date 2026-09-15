@@ -7,6 +7,15 @@
 //! `RuntimeBuild.registration_channel`, and checks every flag named in
 //! `docs/LLAMACPP.md` against the verified list.
 //!
+//! **The registration channel is not the help text's to settle (T-039).** The
+//! help text cannot answer whether a preset entry may declare a model by path,
+//! so [`registration_channel_from_help`] returns `Undetermined` for every
+//! capture in this repo. The value that binds is [`OBSERVED_REGISTRATION_CHANNEL`],
+//! observed against a running binary by T-025 — [`binding_registration_channel`]
+//! is what callers must store and act on. Everything else this module derives
+//! from the help text (verified flags, health endpoint) still comes from the
+//! help text.
+//!
 //! **The parser is format-tolerant, not format-agnostic.** It is built on the
 //! invariants measured across four real captures (b5559, b7213, b9196,
 //! b10809, spanning ~15 months): a flag line starts with `-` at column 0, and
@@ -283,7 +292,12 @@ fn parse_placeholder(ph: &str) -> Placeholder {
 /// In practice every capture to date yields `Undetermined`: the help line reads
 /// "path to INI file containing model presets for the router server", which
 /// names the file but never states whether an entry can *introduce* a model by
-/// path. That is exactly the question T-025 answers by observation.
+/// path. That is exactly the question T-025 answered by observation.
+///
+/// **This is the help reading, not the value to store (T-039).** Store
+/// [`binding_registration_channel`] instead — this function's `Undetermined` is
+/// the *premise* of that resolution, and it stays reachable here because it is
+/// an honest report about the text, not about the build.
 pub fn registration_channel_from_help(help: &str) -> RegistrationChannel {
     // Find the `--models-preset` line (and any same-line description).
     let preset_line = help.lines().find(|l| l.contains("--models-preset"));
@@ -306,6 +320,51 @@ pub fn registration_channel_from_help(help: &str) -> RegistrationChannel {
     } else {
         RegistrationChannel::Undetermined
     }
+}
+
+/// The registration channel **observed** against a running binary. This is the
+/// value that binds when the help text cannot answer: `PLAN.md` §4 makes T-025's
+/// observation override T-023's reading of the help text, including where the
+/// two agree.
+///
+/// T-025 ran the b9196-cpu build in router mode against prepared fixtures: a
+/// preset section carrying `model = <absolute path>` registered that model
+/// under the section's name, so `--models-preset` entries do declare models by
+/// absolute path (PROGRESS.md F-011/F-012). T-033 already branches on this
+/// value; T-039 is what made the code that *writes* the column learn it.
+pub const OBSERVED_REGISTRATION_CHANNEL: RegistrationChannel =
+    RegistrationChannel::PresetDeclaresPath;
+
+/// The binding registration channel for a build (T-039).
+///
+/// `help_says` is what the help text answered — [`registration_channel_from_help`]
+/// at install time, the stored column's value on the read path. The help text
+/// wins whenever it answers at all. When it is silent, the **observation**
+/// binds, but only for a build that offers the interface the observation was
+/// made against: a `--help` listing no `--models-preset` has no router preset
+/// channel for a model to enter through, so no observation of this project's
+/// interface describes it and `Undetermined` survives as a real value — which
+/// is what keeps T-033's refusal a dead-man's switch rather than a formality.
+pub fn binding_registration_channel(
+    help_says: RegistrationChannel,
+    verified_flags: &[VerifiedFlag],
+) -> RegistrationChannel {
+    match help_says {
+        RegistrationChannel::Undetermined if offers_preset_interface(verified_flags) => {
+            OBSERVED_REGISTRATION_CHANNEL
+        }
+        // The help answered → it is authoritative. Silent with no preset
+        // interface → nothing observed this build's interface, so keep it.
+        other => other,
+    }
+}
+
+/// Whether a build's verified flag list contains the router's preset entry
+/// point — the interface T-025's observation was made against. At install time
+/// the list comes from `--help`; on the read path it is the same fact as stored
+/// in `runtimes.verified_flags_json`.
+fn offers_preset_interface(verified_flags: &[VerifiedFlag]) -> bool {
+    verified_flags.iter().any(|f| f.name == "--models-preset")
 }
 
 /// The health endpoint a build offers, from its help text.
@@ -653,6 +712,16 @@ mod tests {
             .unwrap_or_else(|| panic!("flag {name} not found"))
     }
 
+    /// A minimal verified flag for the pure-function tests (the parser's own
+    /// output is covered by the capture-driven tests).
+    fn verified_flag(name: &str) -> VerifiedFlag {
+        VerifiedFlag {
+            name: name.to_string(),
+            takes_value: true,
+            allowed_values: None,
+        }
+    }
+
     // ── Parser against the real captures ──────────────────────────────
 
     #[test]
@@ -812,15 +881,84 @@ mod tests {
     // ── registration channel and health endpoint ──────────────────────
 
     #[test]
-    fn registration_channel_is_undetermined_for_all_captures() {
+    fn help_reading_is_undetermined_for_all_captures() {
         // None of the four captures answers whether a preset entry can declare
-        // a model by absolute path, so all must be Undetermined — not inferred.
+        // a model by absolute path, so the *help reading* is Undetermined for
+        // all of them — not inferred. (T-039: this is the premise the binding
+        // resolution below consumes, not the value to store.)
         for tag in ["b10809", "b7213", "b5559", "b9196"] {
             let channel = registration_channel_from_help(&capture(tag));
             assert_eq!(
                 channel,
                 RegistrationChannel::Undetermined,
                 "{tag} must be Undetermined"
+            );
+        }
+    }
+
+    #[test]
+    fn silent_help_binds_the_observed_channel_when_the_build_offers_the_interface() {
+        // T-039's acceptance, driven by real captures: b9196 and b10809 both
+        // list `--models-preset`, so the interface T-025 observed is present and
+        // the observation binds — the stored channel is PresetDeclaresPath, not
+        // Undetermined. Both captures are silent on the preset question, which
+        // is asserted here as the premise rather than assumed.
+        for tag in ["b9196", "b10809"] {
+            let help = capture(tag);
+            let parsed = parse_help(&help);
+            assert!(
+                offers_preset_interface(&parsed.flags),
+                "{tag} must list --models-preset for the observation to apply"
+            );
+            assert_eq!(
+                registration_channel_from_help(&help),
+                RegistrationChannel::Undetermined,
+                "{tag}'s help is silent — the premise of this test"
+            );
+            assert_eq!(
+                binding_registration_channel(registration_channel_from_help(&help), &parsed.flags),
+                RegistrationChannel::PresetDeclaresPath,
+                "{tag} must bind the observed channel, not Undetermined"
+            );
+        }
+    }
+
+    #[test]
+    fn undetermined_survives_for_a_build_without_a_preset_interface() {
+        // The other half of the same rule. b5559 and b7213 predate the router's
+        // preset channel (their help lists no `--models-preset`), so no
+        // observation of this project's interface describes them: Undetermined
+        // stays, and T-033's refusal stays a real guard.
+        for tag in ["b5559", "b7213"] {
+            let help = capture(tag);
+            let parsed = parse_help(&help);
+            assert!(
+                !offers_preset_interface(&parsed.flags),
+                "{tag} must have no --models-preset — the premise of this test"
+            );
+            assert_eq!(
+                binding_registration_channel(registration_channel_from_help(&help), &parsed.flags),
+                RegistrationChannel::Undetermined,
+                "{tag} has no preset interface, so nothing binds"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answered_help_reading_is_never_overridden_by_the_observation() {
+        // The help text wins whenever it answers at all — including a reading
+        // that disagrees with the observation. `ScanOnly` here stands in for any
+        // answered value: the binding resolution must pass it through.
+        let without_interface: Vec<VerifiedFlag> = Vec::new();
+        let with_interface = vec![verified_flag("--models-preset")];
+        for flags in [&without_interface, &with_interface] {
+            assert_eq!(
+                binding_registration_channel(RegistrationChannel::ScanOnly, flags),
+                RegistrationChannel::ScanOnly
+            );
+            assert_eq!(
+                binding_registration_channel(RegistrationChannel::PresetDeclaresPath, flags),
+                RegistrationChannel::PresetDeclaresPath
             );
         }
     }
