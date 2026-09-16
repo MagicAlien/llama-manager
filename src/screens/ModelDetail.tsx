@@ -23,6 +23,7 @@ import { describeError } from "@/lib/errors";
 import { getModelIdFromHash } from "@/lib/useHashRoute";
 import { Loading } from "@/components/ui/loading";
 import { Badge } from "@/components/ui/badge";
+import { CapabilityTags } from "@/components/CapabilityTags";
 
 // T-035: the model-detail screen. Launch and Sampling tabs, layer-budget
 // slider with live projection, live preset preview (same code path as T-033)
@@ -485,12 +486,16 @@ export function ModelDetailScreen() {
         <a href="#/models" className="text-xs text-accent hover:text-accent-hover">
           {strings.screens.modelDetail.backToModels}
         </a>
-        <div className="flex flex-wrap items-center gap-2">
+        {/* T-037 — one full-width row of capability tags, above the model's
+            own text. A model that declares none renders no row at all. The
+            MTP badge that used to sit beside the name is now one of these
+            tags, so the same fact is not stated twice. */}
+        <div className="mt-2">
+          <CapabilityTags tags={model.capability_tags} />
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
           <h1 className="text-xl font-semibold text-foreground">{model.display_name}</h1>
           {/* T-036: the role comes from the header, never from the filename. */}
-          {model.metadata.has_mtp_heads && (
-            <Badge variant="info">{strings.screens.modelDetail.launch.mtpBadge}</Badge>
-          )}
           {draftCompanionPath !== null && (
             <Badge variant="info">{strings.screens.modelDetail.launch.draftBadge}</Badge>
           )}

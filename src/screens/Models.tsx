@@ -3,6 +3,7 @@ import { importModels, listModels, removeModel, addWatchedFolder, removeWatchedF
 import { strings } from "@/lib/strings";
 import type { ModelEntry, Compatibility, ModelAvailability, WatchedFolder } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
+import { CapabilityTags } from "@/components/CapabilityTags";
 import { Switch } from "@/components/ui/switch";
 import { Dialog } from "@/components/ui/dialog";
 import { Loading } from "@/components/ui/loading";
@@ -38,8 +39,10 @@ function formatParamCount(count: bigint | number | null): string {
 }
 
 function compatibilityBadge(compat: Compatibility) {
+  // T-037 — `Supported` renders nothing: it is true of almost every entry, so
+  // it carried no information. The informative cases are unchanged.
   if (compat === "Supported") {
-    return <Badge variant="success">{strings.screens.models.badges.supported}</Badge>;
+    return null;
   }
   if ("SupportedWithWarnings" in compat) {
     const hasExperimental = compat.SupportedWithWarnings.some((n) => n.experimental);
@@ -54,7 +57,10 @@ function compatibilityBadge(compat: Compatibility) {
 function availabilityBadge(availability: ModelAvailability) {
   switch (availability) {
     case "Present":
-      return <Badge variant="success">{strings.screens.models.badges.present}</Badge>;
+      // T-037 — same reasoning as `Supported` above: the normal case said
+      // nothing, and the model's presence is already implied by a row that
+      // lists it. `Missing` and `Unreadable` are the informative ones.
+      return null;
     case "Missing":
       return <Badge variant="error">{strings.screens.models.badges.missing}</Badge>;
     case "Unreadable":
@@ -239,67 +245,73 @@ export function ModelsScreen() {
         ) : (
           <div className="divide-y divide-border">
             {models.map((model) => (
-              <div key={model.id} className="flex items-center gap-4 p-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">{model.display_name}</span>
-                    {compatibilityBadge(model.compatibility)}
-                    {availabilityBadge(model.availability)}
-                    {model.duplicate_of && (
-                      <Badge variant="warning">{strings.screens.models.duplicate}</Badge>
-                    )}
-                    {model.metadata.is_moe && (
-                      <Badge variant="info">{strings.screens.models.moe}</Badge>
-                    )}
-                  </div>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>{formatSize(model.size_bytes)}</span>
-                    <span>{formatParamCount(model.metadata.param_count)} {strings.screens.models.params}</span>
-                    <span>{model.metadata.quantization}</span>
-                    <span>{model.metadata.architecture}</span>
-                    {model.shard_paths.length > 0 && (
-                      <span>{model.shard_paths.length + 1} {strings.screens.models.shards}</span>
-                    )}
-                  </div>
-                  {model.availability === "Missing" && (
-                    <div className="mt-1 text-xs text-destructive">{model.file_path}</div>
-                  )}
-                </div>
+              <div key={model.id} className="flex flex-col gap-2 p-4">
+                {/* T-037 — the capability tags span the whole card and sit
+                    above the model's own text (owner decision, 14 Sept 2026).
+                    A model with none of them renders no row at all. */}
+                <CapabilityTags tags={model.capability_tags} />
                 <div className="flex items-center gap-4">
-                  <a
-                    href={`#/models/detail/${model.id}`}
-                    className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
-                  >
-                    {strings.screens.models.details}
-                  </a>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Switch
-                      checked={model.preload}
-                      onChange={(checked) => {
-                        if (model.availability !== "Present") return;
-                        setModelPreload(model.id, checked).then(loadModels);
-                      }}
-                      disabled={model.availability !== "Present"}
-                    />
-                    {strings.screens.models.preload}
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Switch
-                      checked={model.pinned}
-                      onChange={(checked) => {
-                        if (model.availability !== "Present") return;
-                        setModelPinned(model.id, checked).then(loadModels);
-                      }}
-                      disabled={model.availability !== "Present"}
-                    />
-                    {strings.screens.models.pinned}
-                  </label>
-                  <button
-                    className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
-                    onClick={() => setRemoveDialog(model)}
-                  >
-                    {strings.screens.models.remove}
-                  </button>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{model.display_name}</span>
+                      {compatibilityBadge(model.compatibility)}
+                      {availabilityBadge(model.availability)}
+                      {model.duplicate_of && (
+                        <Badge variant="warning">{strings.screens.models.duplicate}</Badge>
+                      )}
+                      {model.metadata.is_moe && (
+                        <Badge variant="info">{strings.screens.models.moe}</Badge>
+                      )}
+                    </div>
+                    <div className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+                      <span>{formatSize(model.size_bytes)}</span>
+                      <span>{formatParamCount(model.metadata.param_count)} {strings.screens.models.params}</span>
+                      <span>{model.metadata.quantization}</span>
+                      <span>{model.metadata.architecture}</span>
+                      {model.shard_paths.length > 0 && (
+                        <span>{model.shard_paths.length + 1} {strings.screens.models.shards}</span>
+                      )}
+                    </div>
+                    {model.availability === "Missing" && (
+                      <div className="mt-1 text-xs text-destructive">{model.file_path}</div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <a
+                      href={`#/models/detail/${model.id}`}
+                      className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
+                    >
+                      {strings.screens.models.details}
+                    </a>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Switch
+                        checked={model.preload}
+                        onChange={(checked) => {
+                          if (model.availability !== "Present") return;
+                          setModelPreload(model.id, checked).then(loadModels);
+                        }}
+                        disabled={model.availability !== "Present"}
+                      />
+                      {strings.screens.models.preload}
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Switch
+                        checked={model.pinned}
+                        onChange={(checked) => {
+                          if (model.availability !== "Present") return;
+                          setModelPinned(model.id, checked).then(loadModels);
+                        }}
+                        disabled={model.availability !== "Present"}
+                      />
+                      {strings.screens.models.pinned}
+                    </label>
+                    <button
+                      className="rounded-md border border-border bg-surface px-3 py-1 text-xs font-medium text-foreground hover:bg-surface-hover"
+                      onClick={() => setRemoveDialog(model)}
+                    >
+                      {strings.screens.models.remove}
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

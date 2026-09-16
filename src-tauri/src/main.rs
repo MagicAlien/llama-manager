@@ -98,6 +98,16 @@ fn main() {
         }
     }
 
+    // T-037 — fill in the capability fields on catalogue rows written before
+    // the model reader started answering the Thinking / Tool-use questions, so
+    // an already-imported model shows its tags without being re-imported.
+    // Best-effort for the same reason as the repair above.
+    match crate::core::model_registry::backfill_capability_metadata() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("backfilled capability metadata for {n} model(s)"),
+        Err(err) => tracing::warn!("could not backfill model capability metadata: {err}"),
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![

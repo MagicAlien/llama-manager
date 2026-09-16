@@ -380,6 +380,32 @@ pub struct GgufMetadata {
     /// `--spec-type draft-mtp` — it is NOT a draft companion.
     #[serde(default)]
     pub has_mtp_heads: bool,
+    /// True when the model's own chat template declares a tool-calling reply
+    /// format (T-037). Read from `tokenizer.chat_template`, never from the
+    /// filename and never from an architecture list: the template is the
+    /// file's own statement of how it is meant to be prompted. A writer whose
+    /// tools protocol is spelled differently is omitted, not guessed.
+    #[serde(default)]
+    pub supports_tools: bool,
+    /// True when the model's own chat template declares a reasoning
+    /// ("thinking") block (T-037). Same source and same rule as above.
+    #[serde(default)]
+    pub supports_thinking: bool,
+}
+
+/// What a model can actually do, read from the model itself (T-037). Rendered
+/// as one row of tags on the models list and the detail screen.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, TS)]
+#[ts(export)]
+pub enum CapabilityTag {
+    /// The model's chat template declares a reasoning block.
+    Thinking,
+    /// The model carries MTP heads (`{arch}.nextn_predict_layers`).
+    Mtp,
+    /// The model's file set carries its projector, so it can accept images.
+    Vision,
+    /// The model's chat template declares a tool-calling format.
+    ToolUse,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -536,6 +562,11 @@ pub struct ModelEntry {
     /// Hash of first 1 MiB + size — duplicate *signal*, not identity.
     pub sha256_head: String,
     pub metadata: GgufMetadata,
+    /// What the model itself declares it can do (T-037) — header-derived for
+    /// Thinking/MTP/Tool use, file-set-derived for Vision. Empty for a model
+    /// with none of them; the UI then renders no tag row at all.
+    #[serde(default)]
+    pub capability_tags: Vec<CapabilityTag>,
     pub compatibility: Compatibility,
     pub availability: ModelAvailability,
     /// Another entry with the same `sha256_head`.
@@ -954,7 +985,10 @@ mod tests {
                 expert_count: None,
                 is_draft_model: false,
                 has_mtp_heads: false,
+                supports_tools: false,
+                supports_thinking: false,
             },
+            capability_tags: vec![],
             compatibility: Compatibility::Supported,
             availability: ModelAvailability::Present,
             duplicate_of: None,

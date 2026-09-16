@@ -28,7 +28,10 @@ const plainModel = {
     expert_count: null,
     is_draft_model: false,
     has_mtp_heads: false,
+    supports_tools: false,
+    supports_thinking: false,
   },
+  capability_tags: [],
   compatibility: "Supported",
   availability: "Present",
   duplicate_of: null,
@@ -71,6 +74,22 @@ const mtpModel = {
   id: "model-mtp",
   display_name: "MTP Model",
   metadata: { ...plainModel.metadata, has_mtp_heads: true },
+  // T-037 — the tag list the backend derives; the screen renders it as given.
+  capability_tags: ["Mtp"],
+};
+
+// T-037 — a model whose header declares everything the app can read.
+const capableModel = {
+  ...plainModel,
+  id: "model-capable",
+  display_name: "Capable Model",
+  metadata: {
+    ...plainModel.metadata,
+    has_mtp_heads: true,
+    supports_tools: true,
+    supports_thinking: true,
+  },
+  capability_tags: ["Thinking", "Mtp", "Vision", "ToolUse"],
 };
 
 vi.mock("@/lib/ipc", () => ({
@@ -272,5 +291,38 @@ describe("ModelDetailScreen — T-036 speculative decoding", () => {
 
     expect(await screen.findByText("Speculative type: draft-dspark")).toBeTruthy();
     expect(screen.getByText("Draft tuning")).toBeTruthy();
+  });
+});
+
+describe("ModelDetailScreen — T-037 capability tags", () => {
+  it("renders every capability tag the backend derived, above the model's own text", async () => {
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(capableModel);
+
+    render(<ModelDetailScreen />);
+
+    const name = await screen.findByText("Capable Model");
+    for (const label of ["Thinking", "MTP", "Vision", "Tool use"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    // "Above the model's own text" is a structural property, not a style one:
+    // the tag row precedes the display name in the document.
+    const row = screen.getByText("Thinking").parentElement;
+    expect(row).toBeTruthy();
+    expect(
+      row!.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("renders no tag row at all for a model with no capability", async () => {
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+
+    render(<ModelDetailScreen />);
+
+    expect(await screen.findByText("Test Model")).toBeTruthy();
+    for (const label of ["Thinking", "MTP", "Vision", "Tool use"]) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
   });
 });

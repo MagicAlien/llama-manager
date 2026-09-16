@@ -13,10 +13,11 @@ use std::sync::Arc;
 use chrono::Utc;
 use tracing::{debug, info};
 
+use crate::core::capabilities;
 use crate::core::gguf;
 use crate::core::installer::database_path;
 use crate::core::types::{
-    AppError, Compatibility, FlashAttn, ImportJobId, ImportProgress, LaunchParams,
+    AppError, Compatibility, FlashAttn, GgufMetadata, ImportJobId, ImportProgress, LaunchParams,
     ModelAvailability, ModelEntry, SamplingDefaults, WatchedFolder,
 };
 use crate::db::{self, queries};
@@ -216,14 +217,15 @@ fn model_row_from_entry(
 }
 
 fn model_entry_from_row(row: queries::ModelRow) -> Result<ModelEntry, AppError> {
-    let metadata = serde_json::from_str(&row.metadata_json).map_err(|e| AppError::Internal {
-        message: format!("deserialize metadata: {e}"),
-    })?;
+    let metadata: GgufMetadata =
+        serde_json::from_str(&row.metadata_json).map_err(|e| AppError::Internal {
+            message: format!("deserialize metadata: {e}"),
+        })?;
     let compatibility =
         serde_json::from_str(&row.compatibility_json).map_err(|e| AppError::Internal {
             message: format!("deserialize compatibility: {e}"),
         })?;
-    let launch_params =
+    let launch_params: LaunchParams =
         serde_json::from_str(&row.launch_params_json).map_err(|e| AppError::Internal {
             message: format!("deserialize launch_params: {e}"),
         })?;
@@ -235,6 +237,7 @@ fn model_entry_from_row(row: queries::ModelRow) -> Result<ModelEntry, AppError> 
         serde_json::from_str(&row.shard_paths_json).map_err(|e| AppError::Internal {
             message: format!("deserialize shard_paths: {e}"),
         })?;
+    let capability_tags = capabilities::tags_for(&metadata, &launch_params);
     Ok(ModelEntry {
         id: row.id,
         display_name: row.display_name,
@@ -244,6 +247,7 @@ fn model_entry_from_row(row: queries::ModelRow) -> Result<ModelEntry, AppError> 
         size_bytes: row.size_bytes as u64,
         sha256_head: row.sha256_head,
         metadata,
+        capability_tags,
         compatibility,
         // Availability is re-probed on every read, not trusted from the row:
         // a model removed from disk must surface as Missing without waiting
@@ -355,6 +359,12 @@ async fn import_paths(
         retained_launch_params.mmproj_path = Some(proj);
     }
 
+    // T-037 — the tags a model earns come from its header (Thinking / MTP /
+    // Tool use) and from its own file set (Vision, via the projector resolved
+    // above), so they are derived here from the same two values the entry
+    // stores. One derivation, both screens.
+    let capability_tags = capabilities::tags_for(&metadata, &retained_launch_params);
+
     let entry = ModelEntry {
         id: format!("model-{ts}", ts = Utc::now().timestamp_millis()),
         display_name: normalized
@@ -372,6 +382,7 @@ async fn import_paths(
         size_bytes,
         sha256_head,
         metadata,
+        capability_tags,
         compatibility: Compatibility::Supported,
         availability: ModelAvailability::Present,
         duplicate_of: None,
@@ -439,6 +450,114 @@ pub fn get_model(id: &str) -> Result<Option<ModelEntry>, AppError> {
     let conn = open_db()?;
     let row = queries::get_model(&conn, id)?;
     row.map(model_entry_from_row).transpose()
+}
+
+/// T-037 — repair catalogue rows whose stored metadata predates the capability
+/// fields.
+///
+/// The two capability answers (Thinking, Tool use) live inside the header, and
+/// T-037 reads them once at import. Rows imported earlier therefore carry a
+/// `metadata_json` without `supports_tools` / `supports_thinking`, and
+/// `#[serde(default)]` would faithfully deserialize them as `false` — the tag
+/// row would stay empty for a model that does have the capability. Nothing
+/// re-derives stored metadata on read (re-parsing every model's header on every
+/// list call would read a tokenizer table per model per screen load), so the
+/// correction happens once, here, at startup.
+///
+/// **Minimal and idempotent.** Only the two missing keys are added: every other
+/// field of the stored JSON — including anything a user set or a later task
+/// derived — is carried through untouched. A row that already carries both keys
+/// is skipped without touching the disk. A model whose file has gone away, or
+/// whose header cannot be parsed, keeps its stored value and is logged: a data
+/// anomaly is never upgraded into a plausible answer.
+///
+/// Mirrors `installer::repair_registration_channels_on` (T-039): the same
+/// class of one-off correction, for the same reason.
+pub fn backfill_capability_metadata_on(conn: &rusqlite::Connection) -> Result<u32, AppError> {
+    let rows = queries::list_models(conn)?;
+    let mut corrected = 0u32;
+
+    for row in &rows {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&row.metadata_json) else {
+            tracing::warn!(
+                "model {}: stored metadata is not valid JSON; capability fields left as stored",
+                row.id
+            );
+            continue;
+        };
+        let Some(object) = value.as_object_mut() else {
+            tracing::warn!(
+                "model {}: stored metadata is not a JSON object; capability fields left as stored",
+                row.id
+            );
+            continue;
+        };
+        if object.contains_key("supports_tools") && object.contains_key("supports_thinking") {
+            continue;
+        }
+
+        let path = Path::new(&row.file_path);
+        if !path.exists() {
+            tracing::debug!(
+                "model {}: {} is not on disk; capability fields left as stored",
+                row.id,
+                row.file_path
+            );
+            continue;
+        }
+        let parsed = match gguf::parse_file(path) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                tracing::warn!(
+                    "model {}: header could not be re-read ({err}); capability fields left as stored",
+                    row.id
+                );
+                continue;
+            }
+        };
+
+        object.insert(
+            "supports_tools".to_string(),
+            serde_json::Value::Bool(parsed.supports_tools),
+        );
+        object.insert(
+            "supports_thinking".to_string(),
+            serde_json::Value::Bool(parsed.supports_thinking),
+        );
+        let json = serde_json::to_string(&value).map_err(|e| AppError::Internal {
+            message: format!("serialize metadata: {e}"),
+        })?;
+        queries::set_model_metadata(conn, &row.id, &json)?;
+        info!(
+            "backfilled capability metadata for {}: tools={}, thinking={}",
+            row.display_name, parsed.supports_tools, parsed.supports_thinking
+        );
+        corrected += 1;
+    }
+
+    Ok(corrected)
+}
+
+/// The startup entry point for [`backfill_capability_metadata_on`]: resolves the
+/// database path, ensures its parent directory exists (the database is created
+/// on first open, and `db::open` cannot create its own parent), opens the
+/// database and runs the repair.
+///
+/// **Best-effort by design**, like the T-039 repair beside it: the caller logs
+/// a failure and starts anyway.
+pub fn backfill_capability_metadata() -> Result<u32, AppError> {
+    let db_path = database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    if let Some(dir) = db_path.parent() {
+        if !dir.exists() {
+            std::fs::create_dir_all(dir).map_err(|e| AppError::Io {
+                message: format!("create database directory {}: {e}", dir.display()),
+            })?;
+        }
+    }
+    let conn = db::open(&db_path)?;
+    backfill_capability_metadata_on(&conn)
 }
 
 /// Save a model's launch params and sampling defaults (`docs/CONTRACTS.md`
@@ -789,6 +908,157 @@ mod tests {
             }
         }
         buf
+    }
+
+    /// T-037 — a catalogue row written before the capability fields existed
+    /// must gain them at startup: without this, every already-imported model
+    /// renders an empty tag row while its header plainly declares the
+    /// capabilities (the row is the only thing the screens see).
+    #[test]
+    fn test_t037_backfill_fills_capability_fields_only_and_is_idempotent() {
+        use crate::core::types::CapabilityTag;
+
+        let conn = crate::db::open_in_memory().unwrap();
+
+        let tmp = std::env::temp_dir().join(format!("lm-mgr-t037-backfill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // A real header that declares both template-driven capabilities. The
+        // delimiters are spelled as the real template spells them: plain, no
+        // backslash (see PROGRESS.md F-017).
+        let template = concat!(
+            "{%- if tools %}<tool_call></tool_call>{%- endif %}",
+            "{%- if enable_thinking is undefined %}",
+            "{{- '<think>' + reasoning_content + '</think>' }}",
+            "{%- endif %}"
+        );
+
+        let declares = tmp.join("declares.gguf");
+        std::fs::write(
+            &declares,
+            minimal_gguf(&[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen35".to_string()),
+                ),
+                (
+                    "tokenizer.chat_template",
+                    GgufValue::String(template.to_string()),
+                ),
+            ]),
+        )
+        .unwrap();
+
+        // A header with a template that declares neither.
+        let silent = tmp.join("silent.gguf");
+        std::fs::write(
+            &silent,
+            minimal_gguf(&[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen35".to_string()),
+                ),
+                (
+                    "tokenizer.chat_template",
+                    GgufValue::String("{{ }}".to_string()),
+                ),
+            ]),
+        )
+        .unwrap();
+
+        // A row whose model file is gone.
+        let gone = tmp.join("gone.gguf");
+
+        // The metadata as an earlier version of the app stored it: no
+        // `supports_tools`, no `supports_thinking`, and a user-visible field
+        // (`context_length` 200000) that must survive the correction.
+        let stored_metadata = "{\"architecture\":\"qwen35\",\"param_count\":27000000000,\
+\"quantization\":\"NVFP4\",\"block_count\":65,\"context_length\":200000,\
+\"embedding_length\":null,\"attention_head_count\":null,\"attention_head_count_kv\":null,\
+\"has_chat_template\":true,\"is_moe\":false,\"expert_count\":null,\
+\"is_draft_model\":false,\"has_mtp_heads\":true}"
+            .to_string();
+
+        let mut row = queries::ModelRow {
+            id: "model-declares".to_string(),
+            display_name: "declares.gguf".to_string(),
+            served_name: "declares.gguf".to_string(),
+            file_path: declares.to_string_lossy().to_string(),
+            shard_paths_json: "[]".to_string(),
+            size_bytes: 1024,
+            sha256_head: "abc".to_string(),
+            metadata_json: stored_metadata.clone(),
+            compatibility_json: "\"Supported\"".to_string(),
+            availability: "Present".to_string(),
+            launch_params_json: serde_json::to_string(&LaunchParams::default()).unwrap(),
+            sampling_json: serde_json::to_string(&SamplingDefaults::default()).unwrap(),
+            preload: false,
+            pinned: false,
+            added_at: Utc::now(),
+            last_launched_at: None,
+        };
+        queries::insert_model(&conn, &row).unwrap();
+
+        row.id = "model-silent".to_string();
+        row.served_name = "silent.gguf".to_string();
+        row.file_path = silent.to_string_lossy().to_string();
+        queries::insert_model(&conn, &row).unwrap();
+
+        row.id = "model-gone".to_string();
+        row.served_name = "gone.gguf".to_string();
+        row.file_path = gone.to_string_lossy().to_string();
+        queries::insert_model(&conn, &row).unwrap();
+
+        let corrected = backfill_capability_metadata_on(&conn).unwrap();
+        assert_eq!(
+            corrected, 2,
+            "both rows whose file could be re-read are corrected; the missing one is not"
+        );
+
+        // The declaring model now carries both answers, and everything the row
+        // already held is intact — a field the user can see is not collateral.
+        let updated = queries::get_model(&conn, "model-declares")
+            .unwrap()
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&updated.metadata_json).unwrap();
+        assert_eq!(value["supports_tools"], serde_json::Value::Bool(true));
+        assert_eq!(value["supports_thinking"], serde_json::Value::Bool(true));
+        assert_eq!(value["context_length"], serde_json::json!(200000));
+        assert_eq!(value["has_mtp_heads"], serde_json::Value::Bool(true));
+        assert_eq!(value["quantization"], serde_json::json!("NVFP4"));
+
+        // The reading the screens do now yields the tags.
+        let entry = model_entry_from_row(updated).unwrap();
+        assert_eq!(
+            entry.capability_tags,
+            vec![
+                CapabilityTag::Thinking,
+                CapabilityTag::Mtp,
+                CapabilityTag::ToolUse
+            ],
+            "the row the screens read must now carry the header's answers"
+        );
+
+        // A template that declares neither keeps both fields false: the
+        // correction reports what the header says, it does not invent a tag.
+        let silent_row = queries::get_model(&conn, "model-silent").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&silent_row.metadata_json).unwrap();
+        assert_eq!(value["supports_tools"], serde_json::Value::Bool(false));
+        assert_eq!(value["supports_thinking"], serde_json::Value::Bool(false));
+
+        // A model that is not on disk is left exactly as stored, not guessed.
+        let gone_row = queries::get_model(&conn, "model-gone").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&gone_row.metadata_json).unwrap();
+        assert!(
+            value.get("supports_tools").is_none(),
+            "a file that cannot be re-read must not gain a plausible-looking answer"
+        );
+
+        // Idempotent: the second pass has nothing left to do.
+        assert_eq!(backfill_capability_metadata_on(&conn).unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[tokio::test]

@@ -491,6 +491,8 @@ mod tests {
             expert_count: None,
             is_draft_model: false,
             has_mtp_heads: false,
+            supports_tools: false,
+            supports_thinking: false,
         }
     }
 

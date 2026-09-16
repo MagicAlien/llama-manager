@@ -538,10 +538,36 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
             _ => None,
         });
 
-    let has_chat_template = kv
-        .get("tokenizer.chat_template")
-        .map(|_| true)
+    let has_chat_template = chat_template(&kv).is_some();
+
+    // T-037 — the two capability questions the template answers about itself.
+    // Both stay `false` when the file carries no template (or a template whose
+    // protocol this project does not recognise): "cannot be determined" is
+    // rendered as *absent*, never as a guessed tag.
+    let template_text = chat_template(&kv);
+    let supports_tools = template_text
+        .map(template_declares_tool_use)
         .unwrap_or(false);
+    let supports_thinking = template_text
+        .map(template_declares_thinking)
+        .unwrap_or(false);
+
+    // Name the rule that claimed each tag: "why does this model show Thinking?"
+    // is answered from the log, with the same provenance the table carries.
+    if let Some(text) = template_text {
+        if let Some(protocol) = matched_protocol(text, TOOL_PROTOCOLS) {
+            tracing::debug!(
+                "model declares Tool use: matched protocol from {}",
+                protocol.provenance
+            );
+        }
+        if let Some(protocol) = matched_protocol(text, THINKING_PROTOCOLS) {
+            tracing::debug!(
+                "model declares Thinking: matched protocol from {}",
+                protocol.provenance
+            );
+        }
+    }
 
     let is_moe = architecture == "mixtral"
         || architecture == "deepseek2"
@@ -581,6 +607,8 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         expert_count,
         is_draft_model,
         has_mtp_heads,
+        supports_tools,
+        supports_thinking,
     })
 }
 
@@ -673,6 +701,161 @@ pub fn has_mtp_heads(
     metadata: &std::collections::HashMap<String, GgufValue>,
 ) -> bool {
     metadata.contains_key(&format!("{architecture}.nextn_predict_layers"))
+}
+
+/// The chat template the file itself carries (`tokenizer.chat_template`) —
+/// the writer's own statement of how the model is meant to be prompted.
+/// T-037 reads the two capability questions below out of it.
+pub fn chat_template(metadata: &std::collections::HashMap<String, GgufValue>) -> Option<&str> {
+    metadata
+        .get("tokenizer.chat_template")
+        .and_then(|v| match v {
+            GgufValue::String(s) => Some(s.as_str()),
+            _ => None,
+        })
+}
+
+/// One recognised way a writer spells a capability inside its chat template.
+///
+/// A capability is claimed when **any** protocol in its list matches. That is
+/// deliberate: the writers disagree with each other, not with themselves, and a
+/// template is written by exactly one writer.
+///
+/// The table is the extension point. Adding a writer is one entry plus the
+/// fixture/test that proves it — never a marker typed from memory. Keep each
+/// entry's `provenance` re-openable (a file path, or a URL a future session can
+/// fetch again), because a marker whose source is gone cannot be re-checked
+/// when a template changes.
+struct TemplateProtocol {
+    /// Substrings the template must **all** contain.
+    ///
+    /// An entry with more than one string is a delimiter pair: a template that
+    /// opens a reasoning block without closing it is not a reasoning block, and
+    /// requiring both is also what keeps a template that merely *mentions* the
+    /// word (a system prompt, a doc string) from qualifying. An empty list
+    /// would match every template in existence — a test forbids it.
+    all_of: &'static [&'static str],
+    /// Where these markers were read from, and when. Not decoration: it is the
+    /// audit trail that lets a later session re-verify instead of re-guessing.
+    provenance: &'static str,
+}
+
+/// T-037 — the writers recognised as declaring **tool calling** in their own
+/// chat template.
+///
+/// Every row below was read out of a real template, and the source is named on
+/// the row so a later session can re-fetch it. The Qwen row is byte-verified
+/// against a file on this machine; the others were fetched from Hugging Face
+/// raw template files on 16 Sept 2026 and grepped programmatically (the exact
+/// substrings, with their occurrence counts, are in the row's note). Nothing
+/// here is from memory, and a family that is absent from this table is a family
+/// whose template this project does not recognise — its tag is omitted.
+const TOOL_PROTOCOLS: &[TemplateProtocol] = &[
+    TemplateProtocol {
+        all_of: &["<tool_call>"],
+        provenance: "Qwen + GLM families — byte-verified in the owner's local \
+                     Qwen3.8-27B-NVFP4-MTP-HIGH.gguf (x22) and grepped the same day in the raw \
+                     templates of Qwen/Qwen2.5-72B-Instruct (x3), Qwen/Qwen3-8B (x3), \
+                     Qwen/QwQ-32B (x3) and zai-org/GLM-4.5 (x2) on huggingface.co",
+    },
+    TemplateProtocol {
+        all_of: &["[TOOL_CALLS]"],
+        provenance: "Mistral family — grepped in mistralai/Mistral-7B-Instruct-v0.3 \
+                     (tokenizer_config.json) and unsloth/Mistral-Small-3.2-24B-Instruct-2506 \
+                     (chat_template.jinja), 16 Sept 2026; both also carry [AVAILABLE_TOOLS]",
+    },
+    TemplateProtocol {
+        all_of: &["<|python_tag|>"],
+        provenance: "Llama 3.1/3.2/3.3 Instruct — grepped in \
+                     unsloth/Meta-Llama-3.1-8B-Instruct (tokenizer_config.json), 16 Sept 2026 \
+                     (the official meta-llama repos are gated; the mirror carries the same template)",
+    },
+    TemplateProtocol {
+        all_of: &["<|tool_calls_section_begin|>"],
+        provenance: "Kimi K2 (Moonshot) — grepped in moonshotai/Kimi-K2-Instruct and \
+                     moonshotai/Kimi-K2-Thinking (chat_template.jinja), 16 Sept 2026; the \
+                     section header precedes <|tool_call_begin|> and <|tool_call_argument_begin|>",
+    },
+    TemplateProtocol {
+        all_of: &["<|tool|>"],
+        provenance: "Phi-4-mini-instruct (Microsoft) — grepped in \
+                     microsoft/Phi-4-mini-instruct (tokenizer_config.json), 16 Sept 2026: the \
+                     template renders the tools list between <|tool|> and <|/tool|>",
+    },
+    TemplateProtocol {
+        all_of: &["<tool_calls>"],
+        provenance: "MiniMax-M1 — grepped in MiniMaxAI/MiniMax-M1-80k \
+                     (tokenizer_config.json), 16 Sept 2026, alongside <tools>/</tools>",
+    },
+    TemplateProtocol {
+        all_of: &["<TOOLCALL>"],
+        provenance: "NVIDIA Nemotron Nano 9B v2 — grepped in \
+                     nvidia/NVIDIA-Nemotron-Nano-9B-v2 (tokenizer_config.json), 16 Sept 2026: \
+                     the template shows <TOOLCALL>{\"name\": …, \"arguments\": …}</TOOLCALL>",
+    },
+    TemplateProtocol {
+        all_of: &["<｜tool▁call▁begin｜>"],
+        provenance: "DeepSeek V3/V3.1/R1-distill — grepped in deepseek-ai/DeepSeek-V3.1 and \
+                     deepseek-ai/DeepSeek-R1 (tokenizer_config.json), 16 Sept 2026. Note the \
+                     spelling: the bars are U+FF5C and the spaces are U+2581, not ASCII",
+    },
+];
+
+/// T-037 — the writers recognised as declaring a **reasoning block** in their own
+/// chat template.
+const THINKING_PROTOCOLS: &[TemplateProtocol] = &[
+    TemplateProtocol {
+        all_of: &["<think>", "</think>"],
+        provenance: "One delimiter pair shared across families — required together, so an \
+                     opening tag without its closing one does not qualify. Byte-verified in the \
+                     owner's local Qwen3.8-27B-NVFP4-MTP-HIGH.gguf (2026-09-16, character codes \
+                     recorded in PROGRESS.md F-017) and grepped the same day in the raw templates \
+                     of Qwen/Qwen3-8B, Qwen/QwQ-32B, deepseek-ai/DeepSeek-R1, \
+                     deepseek-ai/DeepSeek-V3.1, zai-org/GLM-4.5, moonshotai/Kimi-K2-Thinking, \
+                     MiniMaxAI/MiniMax-M2 and nvidia/NVIDIA-Nemotron-Nano-9B-v2",
+    },
+    TemplateProtocol {
+        all_of: &["<|channel|>analysis"],
+        provenance: "gpt-oss (20b/120b) — grepped in openai/gpt-oss-20b (chat_template.jinja), \
+                     16 Sept 2026: reasoning is a channel, not a block — the template emits \
+                     <|start|>assistant<|channel|>analysis<|message|> for it",
+    },
+];
+
+/// The first recognised protocol that matches this template, if any.
+fn matched_protocol<'a>(
+    template: &str,
+    protocols: &'a [TemplateProtocol],
+) -> Option<&'a TemplateProtocol> {
+    protocols.iter().find(|protocol| {
+        protocol
+            .all_of
+            .iter()
+            .all(|marker| template.contains(marker))
+    })
+}
+
+/// Does any recognised protocol match this template?
+fn template_matches_any(template: &str, protocols: &[TemplateProtocol]) -> bool {
+    matched_protocol(template, protocols).is_some()
+}
+
+/// T-037 — does the model's own chat template declare a tool-calling format?
+///
+/// The evidence is the template's own rendering of the reply protocol, never a
+/// substring of the filename. A writer whose protocol is not in
+/// [`TOOL_PROTOCOLS`] is **not** guessed at — the tag is omitted, which is
+/// T-037's rule for a header that cannot answer. Widening recognition is one row
+/// in that table plus the evidence for it.
+pub fn template_declares_tool_use(template: &str) -> bool {
+    template_matches_any(template, TOOL_PROTOCOLS)
+}
+
+/// T-037 — does the model's own chat template declare a reasoning block?
+///
+/// Same source, same rule, same extension point as above.
+pub fn template_declares_thinking(template: &str) -> bool {
+    template_matches_any(template, THINKING_PROTOCOLS)
 }
 
 /// Parse GGUF metadata from a file path.
@@ -877,9 +1060,48 @@ pub fn scan_directory(dir: &Path) -> Result<Vec<ModelSet>, AppError> {
             continue;
         }
 
-        // Multiple model sets share the directory: try a name-prefix match.
+        // Multiple model sets share the directory. A DRAFT set is not a
+        // candidate host and must not be allowed to win the match below:
+        // it is not a launchable model, llama.cpp loads a projector together
+        // with the MAIN model, and a draft file never becomes a catalogue
+        // entry — so a projector attached to it is a projector lost.
+        //
+        // Measured (T-037) on the owner's real
+        // `ToBeStyled/Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0`:
+        // that directory holds the main `…-NVFP4.gguf` (arch `qwen35`), the
+        // draft `…-DFlash2-NVFP4.gguf` (arch `dflash`) and
+        // `…-mmproj-BF16.gguf`. The projector's base name
+        // (`…-Ultra-V1.0`) is a prefix of BOTH file names, so the name rule
+        // matched whichever `read_dir` returned first — the draft — and the
+        // real model silently imported with `mmproj_path = null`.
+        //
+        // Excluding drafts costs one header read per extra candidate, and only
+        // in a directory that actually carries a projector; the single-set
+        // fast path above stays free. A head that cannot be parsed counts as
+        // hostable (conservative: an unreadable file must not silently steal
+        // the projector away from a readable one).
         if dir_candidates.len() > 1 {
+            let mut hostable: Vec<&mut ModelSet> = Vec::new();
             for set in dir_candidates {
+                let head_is_draft = set
+                    .model_files
+                    .first()
+                    .and_then(|head| parse_file(head).ok())
+                    .map(|meta| meta.is_draft_model)
+                    .unwrap_or(false);
+                if !head_is_draft {
+                    hostable.push(set);
+                }
+            }
+
+            // Exactly one set left that could host a projector: unambiguous.
+            if hostable.len() == 1 {
+                hostable[0].projector = Some(proj.clone());
+                continue;
+            }
+
+            // Still several: fall back to a name-prefix match among them.
+            for set in hostable {
                 if let Some(first) = set.model_files.first() {
                     let model_name = first
                         .file_name()
@@ -1074,6 +1296,289 @@ mod tests {
         let meta = parse_metadata(Cursor::new(data)).unwrap();
         assert!(meta.is_draft_model);
         assert!(!meta.has_mtp_heads);
+    }
+
+    #[test]
+    fn test_t037_capability_detection_is_header_derived_not_name_derived() {
+        // T-037 acceptance: every tag is header-derived, never name-derived.
+        // The same bytes are written under a name that announces the
+        // capabilities and under one that hides them; in both cases the answer
+        // follows the header.
+        let dir = std::env::temp_dir().join(format!(
+            "lm-mgr-t037-caps-name-vs-header-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+
+        // Header of a model whose template declares both capabilities.
+        let template = concat!(
+            "{%- set tools_ns = namespace(value=0) %}",
+            "{%- if tools and tools is iterable %}",
+            "{{- '<tool_call>' }}",
+            "{%- endif %}",
+            "{%- if enable_thinking is undefined or enable_thinking is true %}",
+            "{{- '<think>' + reasoning_content + '</think>' }}",
+            "{%- endif %}"
+        );
+
+        let declares_both = make_gguf_bytes(
+            0,
+            vec![
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen35".to_string()),
+                ),
+                ("qwen35.block_count", GgufValue::UInt32(65)),
+                (
+                    "tokenizer.chat_template",
+                    GgufValue::String(template.to_string()),
+                ),
+            ],
+        );
+        // Same architecture, no template at all: the file answers nothing.
+        let declares_nothing = make_gguf_bytes(
+            0,
+            vec![
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen35".to_string()),
+                ),
+                ("qwen35.block_count", GgufValue::UInt32(65)),
+            ],
+        );
+
+        // The name announces every capability; the header has none of them.
+        let loud = dir.join("Qwen3.8-27B-Tool-Calling-Thinking-MTP-Q4_K_M.gguf");
+        std::fs::write(&loud, &declares_nothing).expect("write loud fixture");
+        let meta = parse_file(&loud).expect("parse loud fixture");
+        assert!(
+            !meta.supports_tools,
+            "a name is not evidence: no template means no Tool use tag"
+        );
+        assert!(
+            !meta.supports_thinking,
+            "a name is not evidence: no template means no Thinking tag"
+        );
+        assert!(
+            !meta.has_mtp_heads,
+            "a name is not evidence: no nextn_predict_layers means no MTP tag"
+        );
+        assert!(!meta.has_chat_template);
+
+        // The name hides them; the header declares them.
+        let quiet = dir.join("plain-llama-8b-Q4_K_M.gguf");
+        std::fs::write(&quiet, &declares_both).expect("write quiet fixture");
+        let meta = parse_file(&quiet).expect("parse quiet fixture");
+        assert!(
+            meta.supports_tools,
+            "the header's tool-call protocol must win over a quiet name"
+        );
+        assert!(
+            meta.supports_thinking,
+            "the header's reasoning block must win over a quiet name"
+        );
+        assert!(meta.has_chat_template);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_t037_protocol_table_is_wellformed() {
+        // The table is the extension point, so it needs a guard: an entry with
+        // an empty `all_of` would match EVERY template in existence and tag
+        // every model in the catalogue, and an entry without a source cannot be
+        // re-verified when a writer changes its template.
+        for (capability, protocols) in [
+            ("tool use", TOOL_PROTOCOLS),
+            ("thinking", THINKING_PROTOCOLS),
+        ] {
+            assert!(
+                !protocols.is_empty(),
+                "{capability}: no protocol recognised"
+            );
+            for protocol in protocols {
+                assert!(
+                    !protocol.all_of.is_empty(),
+                    "{capability}: an empty all_of matches every template"
+                );
+                assert!(
+                    protocol.all_of.iter().all(|m| !m.is_empty()),
+                    "{capability}: an empty marker matches every template"
+                );
+                assert!(
+                    protocol.provenance.len() > 20,
+                    "{capability}: every protocol must name the source it was read from"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_t037_markers_themselves() {
+        // Spelled exactly as the real Qwen3.8-27B-NVFP4-MTP-HIGH.gguf template
+        // spells them, byte-verified (PROGRESS.md F-017 carries the character
+        // codes): the token is plain, with no backslash — the `\n` that sits
+        // beside it in the template is the Jinja escape and is not part of the
+        // token. Spelling it with a backslash is the transcription trap that was
+        // hit once here: the fixture built that way failed against the corrected
+        // table.
+        let real_template = concat!(
+            "{%- if tools and tools is iterable %}",
+            "{{- '# Tools: you have access to these functions:' }}",
+            "{{- '<tool_call>' }}",
+            "{%- endif %}",
+            "{%- if enable_thinking is undefined or enable_thinking is true %}",
+            "{{- '<think>' + reasoning_content + '</think>' }}",
+            "{%- endif %}"
+        );
+        assert!(template_declares_tool_use(real_template));
+        assert!(template_declares_thinking(real_template));
+
+        // Prose is not a protocol. A template that merely talks about thinking
+        // or tools declares neither.
+        assert!(!template_declares_tool_use(""));
+        assert!(!template_declares_tool_use(
+            "tools are not available in this prompt"
+        ));
+        assert!(!template_declares_tool_use("<tool_callx>"));
+        assert!(!template_declares_thinking(
+            "You may think about the problem first."
+        ));
+        assert!(!template_declares_thinking(
+            "reasoning_effort is set to high"
+        ));
+        assert!(!template_declares_thinking("thinking"));
+        assert!(
+            !template_declares_thinking("<think>"),
+            "an opening delimiter with no closing one is not a reasoning block"
+        );
+        assert!(
+            !template_declares_thinking("</think>"),
+            "a closing delimiter with no opening one is not a reasoning block"
+        );
+    }
+
+    #[test]
+    fn test_t037_recognised_writers_match_their_own_spelling() {
+        // One case per row of the two tables, using a verbatim excerpt of the
+        // template that row's provenance names. A marker that stops matching its
+        // own source would silently drop a tag from the catalogue, so this test
+        // fails here instead.
+        let cases: &[(&str, &str, bool, bool)] = &[
+            // (writer, verbatim excerpt, expects Tool use, expects Thinking)
+            (
+                "Qwen3.8 (local file, byte-verified)",
+                "{{- '<tool_call>\n<function=x>\n</tool_call>' }} <think>{reasoning}</think>",
+                true,
+                true,
+            ),
+            ("Mistral-7B-v0.3", "{{- \"[TOOL_CALLS] [\" }}", true, false),
+            (
+                "Llama-3.1",
+                "{{- \"<|python_tag|>\" + tool_call.name + \".call(\" }}",
+                true,
+                false,
+            ),
+            (
+                "Kimi-K2-Instruct",
+                "<|tool_calls_section_begin|><|tool_call_begin|>id",
+                true,
+                false,
+            ),
+            (
+                "Phi-4-mini",
+                "<|tool|>[{\"name\": \"x\"}]<|/tool|>",
+                true,
+                false,
+            ),
+            ("MiniMax-M1", "<tool_calls>...</tool_calls>", true, false),
+            (
+                "Nemotron-Nano-9B-v2",
+                "{{- '<TOOLCALL>[{\"name\": \"t\", \"arguments\": \"a\"}, ' -}}",
+                true,
+                false,
+            ),
+            (
+                "DeepSeek-V3.1",
+                "<｜tool▁call▁begin｜><｜tool▁sep｜>",
+                true,
+                false,
+            ),
+            (
+                "Qwen3-8B / QwQ-32B / DeepSeek-R1 / GLM-4.5 / Kimi-K2-Thinking / MiniMax-M2",
+                "{%- if reasoning_content -%}<think>{{ reasoning_content }}</think>{%- endif -%}",
+                false,
+                true,
+            ),
+            (
+                "gpt-oss-20b",
+                "{% if channel == 'analysis' -%}<|start|>assistant<|channel|>analysis<|message|>",
+                false,
+                true,
+            ),
+            // Families whose templates were checked and carry no recognised
+            // protocol: the tag stays absent rather than being guessed.
+            (
+                "Gemma-3 (no tool protocol in its template)",
+                "<start_of_turn>user\nhi<end_of_turn>\n<start_of_turn>model\n",
+                false,
+                false,
+            ),
+            (
+                "Hunyuan-A13B (794-char template, no tools)",
+                "<|startoftext|>{{ content }}<|extra_4|>",
+                false,
+                false,
+            ),
+            (
+                "Mixtral-8x7B-Instruct-v0.1 (no tool protocol)",
+                "[INST] hi [/INST] no tools here",
+                false,
+                false,
+            ),
+        ];
+
+        for (writer, excerpt, expects_tools, expects_thinking) in cases {
+            assert_eq!(
+                template_declares_tool_use(excerpt),
+                *expects_tools,
+                "{writer}: Tool use should be {expects_tools}"
+            );
+            assert_eq!(
+                template_declares_thinking(excerpt),
+                *expects_thinking,
+                "{writer}: Thinking should be {expects_thinking}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_t037_an_unrecognised_protocol_yields_no_tag() {
+        // A writer whose template this project does not recognise answers
+        // nothing: the tags stay absent rather than being guessed. The file
+        // DOES carry a template — this is the "header cannot answer" case, not
+        // the "no header" case.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("gemma2".to_string()),
+            ),
+            ("gemma2.block_count", GgufValue::UInt32(42)),
+            (
+                "tokenizer.chat_template",
+                GgufValue::String("{{ messages[0].role }}: {{ messages[0].content }}".to_string()),
+            ),
+        ];
+        let meta = parse_metadata(Cursor::new(make_gguf_bytes(0, kv))).unwrap();
+        assert!(meta.has_chat_template);
+        assert!(
+            !meta.supports_tools,
+            "an unrecognised tools protocol is omitted, never guessed"
+        );
+        assert!(
+            !meta.supports_thinking,
+            "an unrecognised thinking protocol is omitted, never guessed"
+        );
     }
 
     #[test]
@@ -1320,6 +1825,171 @@ mod tests {
     }
 
     #[test]
+    fn test_t037_a_projector_never_lands_on_a_draft_set() {
+        // T-037 regression, reproducing the owner's real directory:
+        // `ToBeStyled/Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0`
+        // holds a main model (arch qwen35), a draft companion (arch dflash)
+        // and one projector whose base name is a prefix of BOTH file names.
+        // Before the fix the projector went to whichever `read_dir` returned
+        // first — the draft — and the real model imported with no projector,
+        // so the capability tags showed no Vision.
+        let tmp =
+            std::env::temp_dir().join(format!("lm-mgr-t037-proj-draft-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let base = "Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0";
+        let main_name = format!("{base}-NVFP4.gguf");
+        let draft_name = format!("{base}-DFlash2-NVFP4.gguf");
+        let proj_name = format!("{base}-mmproj-BF16.gguf");
+
+        std::fs::write(
+            tmp.join(&main_name),
+            make_gguf_bytes(
+                0,
+                vec![
+                    (
+                        "general.architecture",
+                        GgufValue::String("qwen35".to_string()),
+                    ),
+                    ("qwen35.block_count", GgufValue::UInt32(65)),
+                ],
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.join(&draft_name),
+            make_gguf_bytes(
+                0,
+                vec![
+                    (
+                        "general.architecture",
+                        GgufValue::String("dflash".to_string()),
+                    ),
+                    ("dflash.block_count", GgufValue::UInt32(8)),
+                ],
+            ),
+        )
+        .unwrap();
+        // A real header is not required for the projector itself.
+        std::fs::write(tmp.join(&proj_name), [0u8; 16]).unwrap();
+
+        let sets = scan_directory(&tmp).expect("should scan the temp directory");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert_eq!(sets.len(), 2, "a main set and a draft set");
+        let head_name = |s: &ModelSet| {
+            s.model_files
+                .first()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default()
+        };
+        let projector_of = |name: &str| {
+            sets.iter()
+                .find(|s| head_name(s) == name)
+                .and_then(|s| s.projector.as_ref())
+                .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        };
+
+        assert_eq!(
+            projector_of(&main_name),
+            Some(proj_name.clone()),
+            "the projector belongs to the launchable model, not to a draft"
+        );
+        assert_eq!(
+            projector_of(&draft_name),
+            None,
+            "a draft file is never a catalogue entry and cannot host a projector"
+        );
+    }
+
+    #[test]
+    fn test_t037_two_hostable_sets_still_match_by_name() {
+        // The name-prefix rule must keep working where it is the only
+        // discriminator: two launchable models in one directory.
+        let tmp =
+            std::env::temp_dir().join(format!("lm-mgr-t037-proj-two-mains-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let model = |arch: &str| {
+            make_gguf_bytes(
+                0,
+                vec![
+                    ("general.architecture", GgufValue::String(arch.to_string())),
+                    ("llama.block_count", GgufValue::UInt32(32)),
+                ],
+            )
+        };
+        std::fs::write(tmp.join("alpha-8B-Q4_K_M.gguf"), model("llama")).unwrap();
+        std::fs::write(tmp.join("beta-8B-Q4_K_M.gguf"), model("llama")).unwrap();
+        std::fs::write(tmp.join("alpha-8B-mmproj-F16.gguf"), [0u8; 16]).unwrap();
+
+        let sets = scan_directory(&tmp).expect("should scan the temp directory");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let projector_of = |name: &str| {
+            sets.iter()
+                .find(|s| {
+                    s.model_files
+                        .first()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy() == name)
+                        .unwrap_or(false)
+                })
+                .and_then(|s| s.projector.as_ref())
+                .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        };
+
+        assert_eq!(
+            projector_of("alpha-8B-Q4_K_M.gguf"),
+            Some("alpha-8B-mmproj-F16.gguf".to_string()),
+            "the projector's base name selects its model among several"
+        );
+        assert_eq!(projector_of("beta-8B-Q4_K_M.gguf"), None);
+    }
+
+    #[test]
+    fn test_t037_a_directory_of_only_draft_sets_attaches_nothing() {
+        // If every set in the directory is a draft companion there is nothing
+        // launchable for a projector to belong to: better unassigned than
+        // attached to a file that will be rejected at import anyway.
+        let tmp = std::env::temp_dir().join(format!(
+            "lm-mgr-t037-proj-drafts-only-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        for name in ["a-DFlash2.gguf", "b-DSpark.gguf"] {
+            std::fs::write(
+                tmp.join(name),
+                make_gguf_bytes(
+                    0,
+                    vec![
+                        (
+                            "general.architecture",
+                            GgufValue::String("dflash".to_string()),
+                        ),
+                        ("llama.block_count", GgufValue::UInt32(8)),
+                    ],
+                ),
+            )
+            .unwrap();
+        }
+        std::fs::write(tmp.join("shared-mmproj-F16.gguf"), [0u8; 16]).unwrap();
+
+        let sets = scan_directory(&tmp).expect("should scan the temp directory");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(
+            sets.iter().all(|s| s.projector.is_none()),
+            "no launchable model in the directory means no projector assignment"
+        );
+    }
+
+    #[test]
     fn test_real_gguf_file() {
         let path_str = std::env::var("LLAMA_MANAGER_REAL_GGUF");
         if let Ok(path_str) = path_str {
@@ -1333,17 +2003,70 @@ mod tests {
             assert!(!meta.quantization.is_empty());
             assert!(meta.block_count > 0);
             eprintln!(
-                "parsed real GGUF: {} {} {} blocks params={:?} draft={} mtp={}",
+                "parsed real GGUF: {} {} {} blocks params={:?} draft={} mtp={} tools={} thinking={}",
                 meta.architecture,
                 meta.quantization,
                 meta.block_count,
                 meta.param_count,
                 meta.is_draft_model,
-                meta.has_mtp_heads
+                meta.has_mtp_heads,
+                meta.supports_tools,
+                meta.supports_thinking
             );
         } else {
             eprintln!("LLAMA_MANAGER_REAL_GGUF not set, skipping");
         }
+    }
+
+    /// T-037 — the markers above were read out of a real file, so the real file
+    /// must produce the tags they describe. Gated on the same env var as
+    /// `test_real_gguf_file`, and skipped unless that file is the one the
+    /// markers came from: a different writer's template legitimately answers
+    /// differently, and asserting otherwise would turn an evidence-based rule
+    /// into a guess.
+    #[test]
+    fn test_t037_real_gguf_capabilities() {
+        let Ok(path_str) = std::env::var("LLAMA_MANAGER_REAL_GGUF") else {
+            eprintln!("LLAMA_MANAGER_REAL_GGUF not set, skipping");
+            return;
+        };
+        let path = PathBuf::from(&path_str);
+        if !path.exists() {
+            eprintln!("real GGUF file not found: {}", path.display());
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !name.contains("Qwen3.8-27B-NVFP4-MTP") {
+            eprintln!(
+                "skipping: {name} is not the file T-037's markers were read from \
+                 (its own template decides its own tags)"
+            );
+            return;
+        }
+        let meta = parse_file(&path).expect("should parse real GGUF file");
+        assert!(
+            meta.has_chat_template,
+            "the Qwen3.8 file carries a tokenizer.chat_template"
+        );
+        assert!(
+            meta.has_mtp_heads,
+            "qwen35.nextn_predict_layers = 1 is present in the Qwen3.8 MTP file"
+        );
+        assert!(
+            meta.supports_tools,
+            "the template renders a tools block and the <tool_call> protocol"
+        );
+        assert!(
+            meta.supports_thinking,
+            "the template opens a reasoning block with  thinking"
+        );
+        eprintln!(
+            "T-037 real-file capabilities: tools={} thinking={} mtp={}",
+            meta.supports_tools, meta.supports_thinking, meta.has_mtp_heads
+        );
     }
 
     #[test]
