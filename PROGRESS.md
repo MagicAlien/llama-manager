@@ -21,7 +21,7 @@ Next candidate: T-037, then T-038. T-006 remains `Blocked` on D-005.
 
 ## In progress
 
-*16 Sept 2026 — `t-037-model-capability-tags` branch, **local only** (no commit, no push). T-037 — Model capability tags. Stopped before the PR on the owner's instruction: the branch's working tree is what the hand-over build was made from, and the owner tests it before anything is committed.*
+*16 Sept 2026 — `t-037-model-capability-tags` branch, **PR #32 opened** (base `main`, commit `9ff1883` — code and documents in one commit). T-037 — Model capability tags. The build the owner tested was made from this branch's working tree before it was committed; every change their test produced is in that commit.*
 
 T-037's acceptance bullets and where each stands:
 
@@ -81,7 +81,7 @@ The projector was attached to the draft set, and the draft file is rejected at i
 
 **Owner decisions, 16 Sept 2026 (recorded before applying):** **(scope)** the projector-association fix goes **inside T-037**, in this branch — it is T-037's own Vision criterion that cannot be demonstrated on the owner's real model, the same precedent as D-014's preset key-spelling fix — rather than a task of its own, even though the code lives in T-030/T-035's module. **(row correction)** the already-imported row is corrected by the owner pressing **Rescan** in the Models screen, not by an automatic re-association at startup: re-scans are what the button is for, and startup must not walk the catalogue's folders.
 
-**Next:** the owner is testing and will report further findings; nothing is committed, so any change from that report lands in the same working tree. PR (commit, push, template) only after their explicit go-ahead — asked for and declined on 16 Sept 2026 ("no, aspetta — ti riporto ancora qualcosa dopo il test").
+**Next:** `PR #32` is open with CI running; the merge waits for the owner's explicit go-ahead and their choice of merge method, and the task moves to `Done` only after the merge lands (post-merge accounting pushed directly to `main`).
 
 
 *14 Sept 2026 — `t-036-speculative-decoding` branch, **merged via PR #30** (squash-free merge commit `b3a8743`, base `main`; branch commits `4e392f9` code+docs, `5a7a504` PR number, `ee8dec4` fmt fixup — CI first run caught the one fmt hunk the last edit landed after the last fmt run, F-005 again). T-036's launch/UI half implemented, plus the empirical discovery that the preset INI channel had never been exercised against a real binary (D-014/F-015). Done accounting deferred to merge; task NOT marked Done.*
