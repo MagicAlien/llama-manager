@@ -19,6 +19,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 pub mod backend_selection;
+pub mod capabilities;
 pub mod env_probe;
 pub mod estimator;
 #[cfg(test)]

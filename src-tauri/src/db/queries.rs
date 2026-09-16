@@ -255,6 +255,31 @@ pub fn update_model_params(
     Ok(())
 }
 
+/// T-037 — set only `models.metadata_json`, for the one-off backfill of rows
+/// written before the capability fields existed
+/// (`model_registry::backfill_capability_metadata_on`). The caller merges the
+/// two new keys into the stored JSON first, so nothing else is rewritten.
+///
+/// A missing row is a `NotFound`, not a silent no-op.
+pub fn set_model_metadata(
+    conn: &rusqlite::Connection,
+    id: &str,
+    metadata_json: &str,
+) -> Result<(), AppError> {
+    let changed = conn
+        .execute(
+            "UPDATE models SET metadata_json = ?1 WHERE id = ?2",
+            params![metadata_json, id],
+        )
+        .map_err(db_err)?;
+    if changed == 0 {
+        return Err(AppError::NotFound {
+            what: format!("model {id}"),
+        });
+    }
+    Ok(())
+}
+
 pub fn delete_model(conn: &rusqlite::Connection, id: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM models WHERE id = ?1", params![id])
         .map_err(db_err)?;

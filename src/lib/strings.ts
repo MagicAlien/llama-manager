@@ -21,6 +21,16 @@ export const strings = {
   emptyScreenNote: "This screen is scaffolded and not yet functional.",
   close: "Close",
 
+  // T-037 — what a model can actually do, one label per tag. The same four
+  // appear on the models list and on the model detail screen, so they live
+  // here rather than under either screen.
+  capabilities: {
+    thinking: "Thinking",
+    mtp: "MTP",
+    vision: "Vision",
+    toolUse: "Tool use",
+  },
+
   screens: {
     dashboard: {
       navLabel: "Dashboard",
@@ -136,11 +146,13 @@ export const strings = {
       modelsCount: "models",
       details: "Details",
       badges: {
-        supported: "Supported",
+        // T-037 — `supported` and `present` are gone: they were true of
+        // almost every catalogue entry and said nothing about the model.
+        // Their informative cases (`warnings`, `experimental`,
+        // `unsupported`, `missing`, `unreadable`) are unchanged.
         warnings: "Warnings",
         experimental: "Experimental",
         unsupported: "Unsupported",
-        present: "Present",
         missing: "Missing",
         unreadable: "Unreadable",
       },
@@ -219,7 +231,9 @@ export const strings = {
         // T-036 — speculative decoding. The role is read from the model's
         // GGUF header (MTP heads) or from the draft companion the user
         // attaches; nothing here is inferred from a filename.
-        mtpBadge: "MTP",
+        // (T-037 removed the separate `mtpBadge`: MTP is now one of the
+        // capability tags rendered by `CapabilityTags`, so the same fact is
+        // not stated twice.)
         draftBadge: "Draft companion",
         speculativeTitle: "Speculative decoding",
         speculativeMtpNote:

@@ -49,6 +49,13 @@ export type Backend = { "kind": "Cuda", major: number, } | { "kind": "Vulkan" } 
  */
 export type BackendSelection = { release: AvailableRelease, warning: string | null, };
 
+// ---- CapabilityTag ----
+/**
+ * What a model can actually do, read from the model itself (T-037). Rendered
+ * as one row of tags on the models list and the detail screen.
+ */
+export type CapabilityTag = "Thinking" | "Mtp" | "Vision" | "ToolUse";
+
 // ---- CheckStatus ----
 export type CheckStatus = "Pass" | "Warn" | "Fail";
 
@@ -150,7 +157,20 @@ is_draft_model: boolean,
  * normally-launchable model that can additionally draft tokens via
  * `--spec-type draft-mtp` — it is NOT a draft companion.
  */
-has_mtp_heads: boolean, };
+has_mtp_heads: boolean, 
+/**
+ * True when the model's own chat template declares a tool-calling reply
+ * format (T-037). Read from `tokenizer.chat_template`, never from the
+ * filename and never from an architecture list: the template is the
+ * file's own statement of how it is meant to be prompted. A writer whose
+ * tools protocol is spelled differently is omitted, not guessed.
+ */
+supports_tools: boolean, 
+/**
+ * True when the model's own chat template declares a reasoning
+ * ("thinking") block (T-037). Same source and same rule as above.
+ */
+supports_thinking: boolean, };
 
 // ---- GpuInfo ----
 export type GpuInfo = { index: number, name: string, 
@@ -230,7 +250,13 @@ file_path: string, shard_paths: Array<string>, size_bytes: bigint,
 /**
  * Hash of first 1 MiB + size — duplicate *signal*, not identity.
  */
-sha256_head: string, metadata: GgufMetadata, compatibility: Compatibility, availability: ModelAvailability, 
+sha256_head: string, metadata: GgufMetadata, 
+/**
+ * What the model itself declares it can do (T-037) — header-derived for
+ * Thinking/MTP/Tool use, file-set-derived for Vision. Empty for a model
+ * with none of them; the UI then renders no tag row at all.
+ */
+capability_tags: Array<CapabilityTag>, compatibility: Compatibility, availability: ModelAvailability, 
 /**
  * Another entry with the same `sha256_head`.
  */

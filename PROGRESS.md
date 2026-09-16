@@ -21,6 +21,69 @@ Next candidate: T-037, then T-038. T-006 remains `Blocked` on D-005.
 
 ## In progress
 
+*16 Sept 2026 — `t-037-model-capability-tags` branch, **local only** (no commit, no push). T-037 — Model capability tags. Stopped before the PR on the owner's instruction: the branch's working tree is what the hand-over build was made from, and the owner tests it before anything is committed.*
+
+T-037's acceptance bullets and where each stands:
+
+- *Every tag is header-derived, never name-derived* — **done**: the same bytes are written under a name that announces every capability and under one that hides them, and both classify by the header (`test_t037_capability_detection_is_header_derived_not_name_derived`). The four signals are read from `general.architecture` + `{arch}.nextn_predict_layers`, `tokenizer.chat_template`, and the model's own projector association — no filename is consulted anywhere in the path.
+- *MTP is `{arch}.nextn_predict_layers`* — **done**: T-036's `has_mtp_heads`, unchanged; the tag is a view of it.
+- *Vision is the projector in the model's own file set, not an architecture whitelist* — **done**: the signal is `LaunchParams.mmproj_path` (T-031's directory-based association), so "has vision" and "has a projector" are the same statement.
+- *Thinking and Tool use come from the GGUF's own metadata; a header that cannot answer omits the tag rather than guessing* — **done**: both are read from the file's own `tokenizer.chat_template`; the keys and the markers are recorded in **F-017**, which also names the real file each was read from.
+- *A model with none of the four renders no tag row at all* — **done**: `CapabilityTags` returns `null` for an empty list (asserted on both screens), and an unrecognised template yields the same empty list as a model that declares nothing.
+- *The tags occupy one row spanning the model card's width, above the model's own text* — **done**: the row is the card's own first row, above the display name, in both screens (`compareDocumentPosition` asserts the order, not a style). Confirmed on the live screen (screenshot in the hand-off).
+- *The always-true badges stop rendering* — **done**: `compatibilityBadge` renders nothing for `Supported`, `availabilityBadge` nothing for `Present`; `Warnings`/`Experimental`/`Unsupported`/`Missing`/`Unreadable` are untouched, and the two dead strings are removed from `strings.ts` rather than left as unused copy.
+- *"Cannot be determined" is visually distinguishable from "absent" — one of the two is chosen and asserted* — **chosen: absent (no tag).** A tag list states what a model HAS; an "unknown" chip states something about our own knowledge, and a writer whose protocol we do not recognise would then need three chips to say what one missing chip already says. Asserted in `test_t037_an_unrecognised_protocol_yields_no_tag` (template present, declares neither → both flags false) and in the two "no tag row" frontend tests.
+
+**New in this branch:** `core/capabilities.rs` (`tags_for(metadata, launch_params)` — pure, no I/O); `GgufMetadata.supports_tools`/`supports_thinking` + `CapabilityTag` + `ModelEntry.capability_tags` (`core/types.rs`, `src/lib/types.ts` regenerated, 43 types); `core/gguf.rs` reads the template once and answers both questions from it (`chat_template`, `template_declares_tool_use`, `template_declares_thinking`); `src/components/CapabilityTags.tsx`; the tag row + badge removals in `Models.tsx` and `ModelDetail.tsx` (the T-036 `mtpBadge` moved into the tag row rather than being stated twice); `db::queries::set_model_metadata` and `model_registry::backfill_capability_metadata` called best-effort from `main.rs`.
+
+**Why the backfill is part of this task, not a follow-up.** The two template-derived answers are written into `metadata_json` at import, and nothing re-derives stored metadata on read (re-parsing a tokenizer table per model per screen load is not affordable). Without a correction, every already-imported model — including all three of the owner's real ones — would render an empty tag row while its own header declares the capabilities. The repair adds ONLY the two missing keys to the stored JSON object, never rewrites a whole row, never upgrades an unreadable file into a plausible answer, and is idempotent.
+
+**Evidence, live, on the real catalogue (not asserted from unit tests):** launched the release build; the log recorded `backfilled capability metadata for Qwen3.8-27B-Uncensored-NM-DAU-NVFP4-HIGHEST.gguf: tools=true, thinking=true` (same for the other two, `backfilled capability metadata for 3 model(s)`), and the second and third launches corrected nothing — the repair is idempotent in the installed app, not just in a test. An in-crate probe calling the exact chain the screen calls (`ipc::list_models()`, temporary, removed before this record) returned the real rows:
+
+- `Qwen3.8-27B-Uncensored-NM-DAU-NVFP4-HIGHEST.gguf` → `[Thinking, Mtp, Vision, ToolUse]`
+- `Qwen3.8-27B-NVFP4-MTP-HIGH.gguf` → `[Thinking, Mtp, Vision, ToolUse]`
+- `Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0-NVFP4.gguf` → `[Thinking, Mtp, ToolUse]`
+
+and the live screen rendered the same three rows with the tags above each name and no `Supported`/`Present` badge anywhere (window captured over CDP against the running build).
+
+**Gate, all green in-session:** `cargo fmt --check` (clean, empty output), `cargo clippy -- -D warnings` (the gate CI runs — clean; `--all-targets` additionally reports 15 pre-existing lints in older test code, none in this task's code), `cargo test` **261 passed** (was 248; 258 at the first green run, before the projector fix's three tests), `npm run lint`, `npm run test` **35 passed** (was 29), `npm run build` (tsc + vite), `npm run tauri build`. The real-file path was exercised too: `LLAMA_MANAGER_REAL_GGUF` on the owner's Qwen3.8-27B-NVFP4-MTP file → `tools=true thinking=true mtp=true`.
+
+**Owner decisions, 16 Sept 2026 (second test round, recorded):** **(tag-row layout)** the row as built stays — left-aligned pills in the card's own top row, above the model's name; the owner saw it in the running build and confirmed it. **(cannot-be-determined vs absent)** the owner confirmed the choice made in code: when the header cannot answer (a template whose protocol this project does not recognise), the tag is simply **absent** — no "unknown" chip, no placeholder. **(PR)** held: the owner is still testing and reports more first, so nothing is committed; any further change from their report lands in this same working tree.
+
+**Verification after the owner's own Rescan (their click, not a probe):** the ColdFusion row's `launch_params.mmproj_path` moved from `null` to `…-mmproj-BF16.gguf`, and all three catalogue rows now derive `[Thinking, Mtp, Vision, ToolUse]` — read back from the live database after the rescan. The association fix therefore reaches the catalogue through the real UI path, not only through tests.
+
+### Marker coverage: the table is now the extension point (owner-directed, 16 Sept 2026)
+
+The owner asked whether the coverage limit can be lifted with web research, preferring the whole structure prepared now over shipping a half-feature. Two changes follow.
+
+**(1) The marker set became a table.** `core/gguf.rs` now carries `TOOL_PROTOCOLS` / `THINKING_PROTOCOLS`, each entry a `TemplateProtocol { all_of, provenance }`: a capability is claimed when **any** protocol matches, and a protocol matches when **all** of its strings are present (a single string = a tag, several = a delimiter pair). Adding a writer is one row plus the fixture that proves it — never a marker typed from memory. `provenance` is not decoration: it names the file or URL each marker was read from (it is logged at `debug` level when a tag is claimed, so "why does this model show Thinking?" is answerable from `app.log`), and a guard test refuses an entry with an empty marker list, an empty marker, or a missing source — an empty `all_of` would otherwise match every template in existence and tag the whole catalogue.
+
+**(2) A transcription error was caught and corrected while building it.** The first draft of the table — and of F-017 — spelled the Qwen reasoning delimiter with a backslash. It is wrong: the byte-level check on the real template gives the sequence `'` `\` `n` `<` `t` `h` `i` `n` `k` `>` `\` `n` `'` (codes 0x27 0x5c 0x6e 0x3c … 0x3e 0x5c 0x6e 0x27), so the delimiter is plain and the `\n` beside it is the Jinja escape. The unit fixtures written from that draft then failed against the corrected table, which is how it surfaced; the marker now in the table is the byte-verified one, and three fixtures (the marker test, the name-vs-header test, the backfill test) were rewritten to spell the delimiters plainly. The real file re-checks green: `tools=true thinking=true mtp=true` through `test_t037_real_gguf_capabilities` with `LLAMA_MANAGER_REAL_GGUF` set.
+
+**Widening the table landed the same day** (F-018): nine more tool protocols and a second reasoning protocol, each read out of a real raw template fetched from Hugging Face and grepped by a program — Mistral, Llama 3.1/3.2/3.3, Kimi K2, Phi-4-mini, MiniMax-M1, Nemotron Nano v2, DeepSeek, plus the `<think>/</think>` pair that covers nine families and gpt-oss's analysis channel. The 9 rows are in `TOOL_PROTOCOLS`/`THINKING_PROTOCOLS` with the source URL, the model and the occurrence count on each row; a table-driven test drives one verbatim excerpt per row. Families whose templates were checked and carry no tool protocol (Gemma 2/3, Hunyuan-A13B, Mixtral v0.1, InternLM2.5, Phi-4, Yi-1.5, Mistral-Large, Llama-4) gain nothing — the tag stays absent, which is the confirmed behaviour. The research subagent's report was **discarded**: its DeepSeek tokens and several markers came back corrupted, so nothing from it was copied into the code (F-018 records the method that did work).
+
+### The Vision tag the owner's third model did not get — found by their test, fixed in this task
+
+The owner's first test report was exactly this: `ToBeStyled/Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0/Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0-NVFP4.gguf` shows no `Vision` tag while the projector sits in its own folder.
+
+**Root cause, measured on the real directory (not inferred from reading the code).** `core/gguf.rs::scan_directory` associates a projector by directory when the directory holds a single model set, and falls back to a name-prefix match when several share it. That directory holds TWO sets — the main `…-NVFP4.gguf` (arch `qwen35`) and the draft `…-DFlash2-NVFP4.gguf` (arch `dflash`) — and the projector's base name (`…-Ultra-V1.0`) is a prefix of BOTH file names, so the name rule matched whichever `read_dir` returned first. A probe against the real folder printed it before the fix:
+
+```
+set head = …-DFlash2-NVFP4.gguf   arch = dflash   projector = Some(…-mmproj-BF16.gguf)
+set head = …-NVFP4.gguf           arch = qwen35   projector = None
+```
+
+The projector was attached to the draft set, and the draft file is rejected at import (T-035/T-036) — so the projector vanished with it and the launchable model was stored with `mmproj_path = null`. The tag was right; the association was wrong.
+
+**Fix.** In the multi-set branch, a DRAFT set is no longer a candidate host: it is not launchable, llama.cpp loads a projector together with the MAIN model, and a draft file never becomes a catalogue entry, so a projector attached to it is a projector lost. The filter reads the head file's architecture (never the filename — the same rule the rest of the tagging follows); a head that cannot be parsed counts as hostable, so an unreadable file cannot silently steal a projector from a readable one. One hostable set left → assigned directly; still several → the name-prefix rule among them, as before. If every set in the directory is a draft, nothing is attached. The single-set fast path is untouched and still parses nothing, so the extra header read happens only in a directory that carries a projector in the first place.
+
+**Measured after the fix, same real directory:** `…-DFlash2-NVFP4.gguf` → `projector = None`; `…-NVFP4.gguf` (qwen35) → `projector = Some(…-mmproj-BF16.gguf)`. Three tests: the owner's directory shape (main + draft + projector whose base matches both), two launchable models where the name rule is the only discriminator, and an all-draft directory that attaches nothing.
+
+**Owner decisions, 16 Sept 2026 (recorded before applying):** **(scope)** the projector-association fix goes **inside T-037**, in this branch — it is T-037's own Vision criterion that cannot be demonstrated on the owner's real model, the same precedent as D-014's preset key-spelling fix — rather than a task of its own, even though the code lives in T-030/T-035's module. **(row correction)** the already-imported row is corrected by the owner pressing **Rescan** in the Models screen, not by an automatic re-association at startup: re-scans are what the button is for, and startup must not walk the catalogue's folders.
+
+**Next:** the owner is testing and will report further findings; nothing is committed, so any change from that report lands in the same working tree. PR (commit, push, template) only after their explicit go-ahead — asked for and declined on 16 Sept 2026 ("no, aspetta — ti riporto ancora qualcosa dopo il test").
+
+
 *14 Sept 2026 — `t-036-speculative-decoding` branch, **merged via PR #30** (squash-free merge commit `b3a8743`, base `main`; branch commits `4e392f9` code+docs, `5a7a504` PR number, `ee8dec4` fmt fixup — CI first run caught the one fmt hunk the last edit landed after the last fmt run, F-005 again). T-036's launch/UI half implemented, plus the empirical discovery that the preset INI channel had never been exercised against a real binary (D-014/F-015). Done accounting deferred to merge; task NOT marked Done.*
 
 T-036's acceptance bullets and where each stands:
@@ -422,6 +485,8 @@ Things noticed in passing that are not part of any current task — a rough edge
 
 ---
 
+- **Closed in T-037: a projector in a directory that also holds a draft companion was attached to the draft set** and lost with it, so the launchable model imported with `mmproj_path = null` and showed no Vision tag. Measured on the owner's real `ToBeStyled/Qwen3.8-27B-ColdFusion-GAIN-Blackwell-DFlash2-Ultra-V1.0` directory, fixed in that task (a draft set is not a projector host), reported by the owner during testing. Evidence is in the In-progress block above; not a separate task, by owner decision.
+
 ## Facts established
 
 Discoveries that later tasks depend on and that no document predicted. This is the section that saves a future session from re-learning something the hard way.
@@ -447,6 +512,47 @@ Every line below was measured by starting the real `llama-server.exe` (b10883-cp
 - **The installed b10883 row was self-contradictory**: `registration_channel` said `Undetermined` while `verified_flags_json` (391 flags) contained `--models-preset`. The bug lived in the stored data as much as in the derivation, so a code fix alone would have left the installed build wrong.
 - **Repair is observable in one run — log and database**: before launch the row read `Undetermined`; the app logged `corrected stored registration channel for b10883/cpu: Undetermined -> PresetDeclaresPath`; after, the row reads `PresetDeclaresPath`, and a second launch corrects nothing (idempotent). No uninstall/reinstall is involved, and the repair only ever writes the value the read path was already returning.
 
+### F-017 — The two capability questions are answered by the file's own `tokenizer.chat_template`, not by the vocabulary (T-037)
+
+Read out of the owner's real `Qwen3.8-27B-NVFP4-MTP-HIGH.gguf` in `%USERPROFILE%\.lmstudio\models\esatapedico\`, header-only, with a standalone KV dump cross-checked against F-013's wire codes. All four of the owner's Qwen3.8 files (two `esatapedico/`, two `ToBeStyled/`) carry the same shape of template.
+
+- **The key is `tokenizer.chat_template`** (a GGUF string KV, 9 993 chars in that file). It is the writer's own statement of how the model is meant to be prompted — the same source `has_chat_template` already read, now read for content rather than presence.
+- **Tool use is declared by the template's own reply protocol**: the file's tools branch renders `"# Tools\n\nYou have access to the following functions:\n\n<tools>"` and instructs the model to answer with `<tool_call><function=…></function></tool_call>`. The literal `<tool_call>` appears 22 times in that template and is the marker T-037 keys on. A writer whose tools protocol is spelled differently (`[TOOL_CALLS]`, `<|python_tag|>`, a JSON protocol) is **not recognised and its tag is omitted** — the honest reading, per the task's "omit rather than guess" rule; adding a writer is one marker plus the fixture that proves it.
+- **Thinking is declared by the template's own reasoning block**: the assistant turn opens with the delimiter pair `<think>` / `</think>`, **byte-verified from the real file** — the sequence around the token is `'\n<think>\n'` (character codes 0x27 0x5c 0x6e 0x3c 0x74 0x68 0x69 0x6e 0x6b 0x3e 0x5c 0x6e 0x27): the delimiter itself is plain <think>, and the \n beside it is the Jinja escape, **not part of the token**. Line 178 onward emits it for the assistant turn; line 119 renders stored reasoning as `<|im_start|>>' + message.role + '\n<think>\n' + reasoning_content + '\n</think>\n\n' + content`. The two delimiters are required together, so a template merely *mentioning* reasoning (a system prompt, a doc string) cannot qualify.
+- **Transcription trap, hit once here (T-037):** the first draft of this entry — and of the code's marker table — spelled the delimiter with a backslash (<think\>), reading the Jinja escape beside it as part of the token. The unit fixtures written from that draft then failed against the corrected table, which is how it was caught. The marker in the table is the byte-verified one; the note above now carries the character codes so the next reader can check it without re-dumping the file.
+- **The token vocabulary is NOT the signal, and looking there would be a false-positive machine**: `tokenizer.ggml.tokens` in that file contains `think`, `thinking`, `tool`, `tools`, `Tool`, `ToolStrip`, `tooltip`, … — every one of them at type 1 (ordinary merge), because a BPE vocabulary contains the subwords of any word it must encode. Its `tokenizer.ggml.token_type` array has no dedicated reasoning or tool token. A rule of the form "the vocab contains a thinking token" is true of nearly every model.
+- **`general.tags` is not the signal either**: the files carry `["unsloth"]`, or on the ColdFusion file a vLLM-style list (`["nvfp4","vllm","qwen3.8","cold-fusion","gain","mtp","speculative-decoding","image-text-to-text"]`) — writer metadata about how the file was made, not a capability declaration the app may act on.
+- **Vision is deliberately NOT read from the template**: the same template renders image content (9 occurrences of `image`, 9 of `vision`), yet vision is a property of the model *file set* — the projector — not of the text template. Keying Vision on template text would tag a text-only file that merely mentions images.
+
+Also measured, and the reason the adoption is worth it for the owner's catalogue: all three installed models answer **both** questions yes, so every row gains `Thinking` and `Tool use`; two gain `Vision` (their projector is associated), and one carries MTP heads.
+
+### F-018 — The tool-calling and reasoning protocol vocabulary across model families (T-037, 16 Sept 2026)
+
+Every marker below was read out of a **real raw template file** fetched from `huggingface.co` on 16 Sept 2026 and grepped programmatically — the exact substring with its occurrence count, no model in the loop. This is the vocabulary the tracker at the end of this entry may act on; a family absent from it is one whose template this project does not recognise, and its tag is omitted rather than guessed.
+
+**Tool calling** (a row exists in `core::gguf::TOOL_PROTOCOLS` for each `marker` below):
+
+| family | marker (verbatim) | verified in |
+|---|---|---|
+| Qwen2.5 / Qwen3 / QwQ-32B / GLM-4.5 / owner's Qwen3.8 | `<tool_call>` | Qwen/Qwen2.5-72B-Instruct ×3, Qwen/Qwen3-8B ×3, Qwen/QwQ-32B ×3, zai-org/GLM-4.5 ×2, local Qwen3.8 file ×22 |
+| Mistral (7B v0.3, Small 3.2) | `[TOOL_CALLS]` | mistralai/Mistral-7B-Instruct-v0.3, unsloth/Mistral-Small-3.2-24B-Instruct-2506 (both also carry `[AVAILABLE_TOOLS]`) |
+| Llama 3.1/3.2/3.3 | `<|python_tag|>` | unsloth/Meta-Llama-3.1-8B-Instruct |
+| Kimi K2 (Instruct / Thinking) | `<|tool_calls_section_begin|>` | moonshotai/Kimi-K2-Instruct, moonshotai/Kimi-K2-Thinking |
+| Phi-4-mini-instruct | `<|tool|>` | microsoft/Phi-4-mini-instruct |
+| MiniMax-M1 | `<tool_calls>` | MiniMaxAI/MiniMax-M1-80k |
+| NVIDIA Nemotron Nano 9B v2 | `<TOOLCALL>` | nvidia/NVIDIA-Nemotron-Nano-9B-v2 |
+| DeepSeek V3/V3.1/R1-distill | `<｜tool▁call▁begin｜>` | deepseek-ai/DeepSeek-V3.1, deepseek-ai/DeepSeek-R1 — **spelling matters**: the bars are U+FF5C, the spaces U+2581, not ASCII |
+
+**Reasoning block** — one delimiter pair covers nine families, which is why it is a single row:
+
+| family | marker (verbatim) | verified in |
+|---|---|---|
+| Qwen3/Qwen3.8, QwQ-32B, DeepSeek-V3.1, DeepSeek-R1, GLM-4.5, Kimi-K2-Thinking, MiniMax-M2, Nemotron-Nano-9B-v2 | `<think>` **and** `</think>` | the local Qwen3.8 file plus the eight HF templates above |
+| gpt-oss (20b/120b) | `<|channel|>analysis` | openai/gpt-oss-20b — reasoning is a *channel*, not a block: `<|start|>assistant<|channel|>analysis<|message|>` |
+
+**Checked and found to carry no tool protocol** (their templates were fetched and read; the tag stays absent by design): Gemma 2 and Gemma 3, Hunyuan-A13B (a 794-char template), Mixtral-8x7B-Instruct-v0.1, InternLM2.5, Phi-4 (non-mini), Yi-1.5, Mistral-Large-Instruct-2411, Llama-4 Scout/Maverick.
+
+**Method note, worth repeating for the next marker hunt:** the first attempt used a research subagent and produced a corrupted report — the DeepSeek tokens came back as mojibake and several markers as empty strings, which would have put silently wrong rows in the table. Fetching the raw files and grepping them with a program (printing the matched substrings with their code points) is what made the result trustworthy, and it took one pass. When a marker is added later, do that again.
 ### F-013 — GGUF v3 metadata value-type wire codes (T-034 session, 8 Sept 2026)
 
 `u8=0, i8=1, u16=2, i16=3, u32=4, i32=5, f32=6, bool=7, string=8, array=9, u64=10, i64=11, f64=12` — verified by hex-dumping the user's real `Qwen3.8-27B-NVFP4-MTP-HIGH.gguf` (general.architecture carries type 8 = string). The original `core/gguf.rs` enum used a shifted order (string=11) that broke every real file with `string too long: 7954895644034859008` (ASCII `qwen` misread as a length). Fixtures generated by the same wrong codes passed the tests. Related conventions confirmed on the same file: per-arch KV keys are prefixed with the architecture string itself (`qwen35.block_count`, never a fixed `llama.` prefix), and the quantization label is `general.file_type` (llama.cpp FTYPE enum) — `general.quantization_version` is always 2 and means nothing human.
