@@ -478,7 +478,18 @@ Commissioned by the owner to apply a decision, never opened on your own initiati
 
 These sit outside the milestones on purpose. A milestone is a functional outcome; a correction is maintenance of the specification, and folding one into the other would make the milestone ranges in `PLAN.md` §4 stop meaning anything.
 
-*(none yet)*
+### T-100 — `docs/CONTRACTS.md` §1 states the pinned build's measured coefficients, and the terms it never had `[closes: D-017]`
+
+Commissioned by the owner on 17 Sept 2026, verbatim: *"Non vedo scelte da parte mia, hai il diritto di correggere questa cosa."* The decision applied is D-017's proposal **(a)**: §1's **coefficients** and its **KV-layer count** are corrected to what the pinned build's own accounting measures, and the two terms the document never carried — a hybrid model's recurrent state, and a speculative-decoding configuration — are added. §1's **structure** stands: weights + cache + compute + context + margin, and the "missing metadata degrades, it does not guess" rule with it.
+
+**Documents changed.**
+
+- `docs/CONTRACTS.md` §1, *The estimation model*: the formula block (`layers_with_cache` from `full_attention_interval`; `key_dim` / `value_dim` declared per head and priced with their own cache types; `q8_0 = 1.0625` B per element; `projector_bytes`, `recurrent_bytes`, `draft_bytes` and `mtp_bytes` as terms of `estimated_vram`); four paragraphs stating why each figure is what it is, each one measured against `llama-server.exe` b10883 and cited to F-019; the degrade rules (the defaults are two single values, and the model always produces a figure rather than a zero); `recommended_gpu_layers`' search, with the layer-independent terms inside the comparison; and the `EstimateInputs` / `DraftModelInputs` / `VramEstimate` listings in that section, which are the model's own inputs and outputs.
+- `PROGRESS.md`: D-017 moves to `resolved by T-100` once this task is merged, naming the merge commit.
+
+**No code file is touched**, and this is not a case of the document leading the code: `core/estimator.rs` already implements this model (T-038, merged as PR #33) and its `insta` snapshots already freeze it. The task makes the document agree with the implementation, not the reverse. Two drifts found while redrafting and corrected here because they are lines of the same section, which D-017 did not enumerate: the formula never carried the `projector_bytes` term the code has applied since the vision work, and the "scan, not a solve" rationale described a search the code no longer performs.
+
+*Acceptance:* `docs/CONTRACTS.md` §1 says what the decision says — every coefficient in it is the measured one, the recurrent and speculative terms appear in both the formula and the prose, and no sentence in the section contradicts `core/estimator.rs`. `docs/TASKS.md`'s checks (T-006) pass on the result: T-100 appears in the Corrections section only, its `[closes: D-017]` names a discrepancy that exists, and every document reference it makes resolves. `PROGRESS.md`'s D-017 reads `resolved by T-100`, with the date and the merge commit. `git diff main --stat` touches `docs/` and `PROGRESS.md` only — no code file, no snapshot, no fixture.
 
 <!-- Format:
 
