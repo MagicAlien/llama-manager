@@ -108,6 +108,17 @@ fn main() {
         Err(err) => tracing::warn!("could not backfill model capability metadata: {err}"),
     }
 
+    // T-038 — fill in the header-derived geometry (attention interval, per-head
+    // dimensions, recurrent-state keys, MTP layer count) on catalogue rows
+    // written before the estimator read them, so an already-imported hybrid
+    // model stops projecting a KV cache for all of its layers. Same recipe,
+    // same best-effort posture.
+    match crate::core::model_registry::backfill_vram_metadata() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("backfilled VRAM geometry for {n} model(s)"),
+        Err(err) => tracing::warn!("could not backfill model VRAM geometry: {err}"),
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![

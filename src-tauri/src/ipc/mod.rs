@@ -24,14 +24,15 @@
 
 use crate::core::env_probe;
 use crate::core::estimator;
+use crate::core::gguf;
 use crate::core::gh_releases;
 use crate::core::installer;
 use crate::core::model_registry;
 use crate::core::preset_generator;
 use crate::core::types::{
-    AppError, AvailableRelease, Backend, EnvironmentReport, EstimateInputs, ImportJobId,
-    ImportProgress, InstallProgress, LaunchParams, ModelEntry, SamplingDefaults, VramEstimate,
-    WatchedFolder,
+    AppError, AvailableRelease, Backend, DraftModelInputs, EnvironmentReport, EstimateInputs,
+    ImportJobId, ImportProgress, InstallProgress, LaunchParams, ModelEntry, SamplingDefaults,
+    VramEstimate, WatchedFolder,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -427,6 +428,22 @@ pub fn estimate_vram(
         .map(|m| m.len())
         .unwrap_or(0);
 
+    // T-038 — the draft companion is a second model loaded alongside this one,
+    // so both its weights and its own KV cache belong in the projection. Both
+    // halves are read from the file itself here; a companion that has been
+    // deleted or replaced since it was saved keeps `None` for both, which the
+    // estimator reports as an unaccounted term with a note naming the path
+    // (never as a zero that reads like "it costs nothing").
+    let draft = launch_params
+        .speculative
+        .as_ref()
+        .and_then(|spec| spec.draft_companion.as_ref())
+        .map(|path| DraftModelInputs {
+            path: path.clone(),
+            size_bytes: std::fs::metadata(path).ok().map(|m| m.len()),
+            metadata: gguf::parse_file(path).ok(),
+        });
+
     let inputs = EstimateInputs {
         metadata: model.metadata,
         file_size_bytes: model.size_bytes,
@@ -434,6 +451,7 @@ pub fn estimate_vram(
         vram_free_bytes,
         vram_total_bytes,
         projector_bytes,
+        draft,
         ram_free_bytes,
     };
 

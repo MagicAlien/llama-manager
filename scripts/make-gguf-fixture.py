@@ -12,6 +12,11 @@ Options:
     --blocks N          Number of blocks (default: 32)
     --heads N           Number of attention heads (default: 32)
     --heads-kv N        Number of KV heads (default: 8)
+    --embedding N       Embedding length (default: 4096 for llama-family, 3072 for gemma/phi)
+    --key-length N      Per-head key dimension (attention.key_length); omitted when 0
+    --value-length N    Per-head value dimension (attention.value_length); omitted when 0
+    --mtp-layers N      Multi-Token-Prediction layers (nextn_predict_layers); omitted when 0
+    --hybrid            Hybrid attention/SSM header: full_attention_interval plus the four ssm.* keys
     --context N         Context length (default: 4096)
     --shards N          Number of shards (default: 1)
     --sparse            Create sparse file (seek past data)
@@ -162,6 +167,110 @@ def create_gguf(filename, args):
             _write_gguf_content(f, args, arch, base_name, shard_idx, shard_total)
 
 
+def arch_key(arch, suffix):
+    """The key a per-architecture value is stored under.
+
+    GGUF prefixes every per-arch key with the architecture string itself
+    (`qwen35.block_count`, `gemma.attention.head_count_kv`), and that is what
+    llama.cpp reads. Writing a fixed `llama.` prefix for a `gemma`, `phi3` or
+    `mixtral` architecture produced fixtures no real writer emits — files whose
+    keys only the reader's own fallback could find, so the fixtures and the
+    reader agreed with each other and not with reality (the same
+    self-consistent-wrongness class as the GGUF wire-type codes; see
+    PROGRESS.md F-013/F-019).
+    """
+    return f"{arch}.{suffix}"
+
+
+def build_kv_pairs(args, arch, shard_total):
+    """Every KV pair the fixture carries, in write order.
+
+    The header's KV count is `len()` of this list — never a hand-maintained
+    tally. A count that disagrees with the pairs actually written makes every
+    reader desynchronise (the fixture-count pitfall in this repo's own notes).
+    """
+
+    def key(suffix):
+        return arch_key(arch, suffix)
+
+    pairs = [
+        ("string", "general.architecture", arch),
+        ("string", "general.name", f"{args.base_name}-{args.params}"),
+        ("string", "general.parameters", args.params),
+        # The human quant label rides in general.file_type (llama.cpp's FTYPE
+        # enum) — general.quantization_version is the encoding spec version
+        # (always 2), not a label. Reverse of ftype_label() in gguf.rs.
+        ("uint32", "general.file_type", FTYPE_CODES.get(args.quant, 0)),
+    ]
+
+    if arch in ("llama", "mistral", "qwen", "qwen3", "qwen35", "mixtral", "deepseek2"):
+        pairs += [
+            ("uint32", key("block_count"), args.blocks),
+            ("uint32", key("context_length"), args.context),
+            ("uint32", key("embedding_length"), args.embedding or 4096),
+            ("uint32", key("attention.head_count"), args.heads),
+            ("uint32", key("attention.head_count_kv"), args.heads_kv),
+        ]
+    elif arch in ("gemma", "gemma2"):
+        pairs += [
+            ("uint32", key("block_count"), args.blocks),
+            ("uint32", key("context_length"), args.context),
+            ("uint32", key("embedding_length"), args.embedding or 3072),
+            ("uint32", key("attention.head_count"), args.heads),
+            ("uint32", key("attention.head_count_kv"), 1),
+        ]
+    elif arch in ("phi", "phi3"):
+        pairs += [
+            ("uint32", key("block_count"), args.blocks),
+            ("uint32", key("context_length"), args.context),
+            ("uint32", key("embedding_length"), args.embedding or 3072),
+        ]
+
+    # T-038: the per-head dimensions. Present on real files, absent on older
+    # ones — optional here so both shapes are represented in the fixture set.
+    if args.key_length:
+        pairs.append(("uint32", key("attention.key_length"), args.key_length))
+    if args.value_length:
+        pairs.append(("uint32", key("attention.value_length"), args.value_length))
+
+    if args.mtp_layers:
+        # T-038: Multi-Token-Prediction layers — a complete model that can
+        # additionally draft tokens.
+        pairs.append(("uint32", key("nextn_predict_layers"), args.mtp_layers))
+
+    if args.hybrid:
+        # T-038: a hybrid attention/SSM model, exactly as the owner's real
+        # Qwen3.8 files declare it.
+        pairs += [
+            ("uint32", key("full_attention_interval"), args.full_attention_interval),
+            ("uint32", key("ssm.state_size"), args.ssm_state_size),
+            ("uint32", key("ssm.inner_size"), args.ssm_inner_size),
+            ("uint32", key("ssm.group_count"), args.ssm_group_count),
+            ("uint32", key("ssm.conv_kernel"), args.ssm_conv_kernel),
+        ]
+
+    if args.chat_template:
+        pairs.append(
+            (
+                "string",
+                "tokenizer.chat_template",
+                "{% for m in messages %}{{ m.content }}{% endfor %}",
+            )
+        )
+
+    if args.moe:
+        pairs += [
+            ("uint32", key("expert_count"), 8),
+            ("uint32", key("expert_used_count"), 2),
+        ]
+
+    # Shard info
+    if shard_total > 1:
+        pairs.append(("uint32", key("file.type"), 1))
+
+    return pairs
+
+
 def _write_gguf_content(f, args, arch, base_name, shard_idx, shard_total):
     """Write GGUF content to file."""
 
@@ -175,57 +284,17 @@ def _write_gguf_content(f, args, arch, base_name, shard_idx, shard_total):
     tensor_count = 4
     write_u64(f, tensor_count)
 
-    # KV pair count — calculate based on architecture
-    kv_count = 4  # general: architecture, name, parameters, file_type
-    if args.chat_template:
-        kv_count += 1
-    if args.moe:
-        kv_count += 2
-    if arch in ("llama", "mistral", "qwen", "qwen3", "mixtral", "deepseek2"):
-        kv_count += 5  # block_count, context_length, embedding_length, head_count, head_count_kv
-    elif arch in ("gemma", "gemma2"):
-        kv_count += 5  # block_count, context_length, embedding_length, head_count, head_count_kv
-    elif arch in ("phi", "phi3"):
-        kv_count += 3  # block_count, context_length, embedding_length
-    write_u64(f, kv_count)
+    # KV pairs, and the count derived from them.
+    pairs = build_kv_pairs(args, arch, shard_total)
+    write_u64(f, len(pairs))
 
-    # KV pairs
-    write_kv_string(f, "general.architecture", arch)
-    write_kv_string(f, "general.name", f"{base_name}-{args.params}")
-    write_kv_string(f, "general.parameters", args.params)
-    # The human quant label rides in general.file_type (llama.cpp's FTYPE
-    # enum) — general.quantization_version is the encoding spec version
-    # (always 2), not a label. Reverse of ftype_label() in gguf.rs.
-    write_kv_uint32(f, "general.file_type", FTYPE_CODES.get(args.quant, 0))
-
-    # Architecture-specific
-    if arch in ("llama", "mistral", "qwen", "qwen3", "mixtral", "deepseek2"):
-        write_kv_uint32(f, "llama.block_count", args.blocks)
-        write_kv_uint32(f, "llama.context_length", args.context)
-        write_kv_uint32(f, "llama.embedding_length", 4096)
-        write_kv_uint32(f, "llama.attention.head_count", args.heads)
-        write_kv_uint32(f, "llama.attention.head_count_kv", args.heads_kv)
-    elif arch in ("gemma", "gemma2"):
-        write_kv_uint32(f, "llama.block_count", args.blocks)
-        write_kv_uint32(f, "llama.context_length", args.context)
-        write_kv_uint32(f, "llama.embedding_length", 3072)
-        write_kv_uint32(f, "llama.attention.head_count", args.heads)
-        write_kv_uint32(f, "llama.attention.head_count_kv", 1)
-    elif arch in ("phi", "phi3"):
-        write_kv_uint32(f, "llama.block_count", args.blocks)
-        write_kv_uint32(f, "llama.context_length", args.context)
-        write_kv_uint32(f, "llama.embedding_length", 3072)
-
-    if args.chat_template:
-        write_kv_string(f, "tokenizer.chat_template", "{% for m in messages %}{{ m.content }}{% endfor %}")
-
-    if args.moe:
-        write_kv_uint32(f, "llama.expert_count", 8)
-        write_kv_uint32(f, "llama.expert_used_count", 2)
-
-    # Shard info
-    if shard_total > 1:
-        write_kv_uint32(f, "llama.file.type", 1)
+    writers = {
+        "string": write_kv_string,
+        "uint32": write_kv_uint32,
+        "uint64": write_kv_uint64,
+    }
+    for kind, name, value in pairs:
+        writers[kind](f, name, value)
 
     # Dummy tensor descriptors
     write_tensor(f, "token_embd.weight", [4096, 32000])
@@ -240,9 +309,37 @@ def main():
     parser.add_argument("--arch", default="llama", help="Architecture name")
     parser.add_argument("--params", default="8B", help="Parameter count string")
     parser.add_argument("--quant", default="Q4_K_M", help="Quantization version")
-    parser.add_argument("--blocks", type=int, default=32, help="Number of blocks")
-    parser.add_argument("--heads", type=int, default=32, help="Attention heads")
-    parser.add_argument("--heads-kv", type=int, default=8, help="KV heads")
+    parser.add_argument("--blocks", type=int, default=32, help="Number of blocks (default: 32)")
+    parser.add_argument("--heads", type=int, default=32, help="Attention heads (default: 32)")
+    parser.add_argument("--heads-kv", type=int, default=8, help="KV heads (default: 8)")
+    parser.add_argument(
+        "--embedding", type=int, default=0,
+        help="Embedding length (default: the per-architecture value: 4096 for llama-family, 3072 for gemma/phi)",
+    )
+    parser.add_argument(
+        "--key-length", type=int, default=0,
+        help="Per-head key dimension ({arch}.attention.key_length); omitted when 0",
+    )
+    parser.add_argument(
+        "--value-length", type=int, default=0,
+        help="Per-head value dimension ({arch}.attention.value_length); omitted when 0",
+    )
+    parser.add_argument(
+        "--mtp-layers", type=int, default=0,
+        help="Multi-Token-Prediction layers ({arch}.nextn_predict_layers); omitted when 0",
+    )
+    parser.add_argument(
+        "--hybrid", action="store_true",
+        help="Write a hybrid attention/SSM header: full_attention_interval plus the four ssm.* keys",
+    )
+    parser.add_argument(
+        "--full-attention-interval", type=int, default=4,
+        help="With --hybrid: one full-attention layer every N (default: 4)",
+    )
+    parser.add_argument("--ssm-state-size", type=int, default=128, help="With --hybrid: ssm.state_size")
+    parser.add_argument("--ssm-inner-size", type=int, default=6144, help="With --hybrid: ssm.inner_size")
+    parser.add_argument("--ssm-group-count", type=int, default=16, help="With --hybrid: ssm.group_count")
+    parser.add_argument("--ssm-conv-kernel", type=int, default=4, help="With --hybrid: ssm.conv_kernel")
     parser.add_argument("--context", type=int, default=4096, help="Context length")
     parser.add_argument("--shards", type=int, default=1, help="Number of shards")
     parser.add_argument("--sparse", action="store_true", help="Create sparse file")

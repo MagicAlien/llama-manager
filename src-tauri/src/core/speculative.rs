@@ -285,11 +285,22 @@ mod tests {
                 embedding_length: Some(5120),
                 attention_head_count: Some(40),
                 attention_head_count_kv: Some(8),
+                attention_key_length: None,
+                attention_value_length: None,
+                full_attention_interval: None,
+                ssm_state_size: None,
+                ssm_inner_size: None,
+                ssm_group_count: None,
+                ssm_conv_kernel: None,
                 has_chat_template: true,
                 is_moe: false,
                 expert_count: None,
                 is_draft_model: false,
                 has_mtp_heads,
+                // The helper takes the flag; a file that declares MTP heads
+                // declares at least one MTP layer, which is what the
+                // estimator prices (T-038).
+                mtp_layer_count: if has_mtp_heads { Some(1) } else { None },
                 supports_tools: false,
                 supports_thinking: false,
             },

@@ -364,6 +364,33 @@ pub struct GgufMetadata {
     /// notes rather than assuming they are equal.
     pub attention_head_count: Option<u32>,
     pub attention_head_count_kv: Option<u32>,
+    /// Per-head dimensions, from `{arch}.attention.key_length` /
+    /// `{arch}.attention.value_length` (T-038). These are what llama.cpp itself
+    /// uses for `n_embd_head_k` / `n_embd_head_v`, and they are not always
+    /// `embedding_length / attention_head_count`: on the owner's real Qwen3.8
+    /// files they are 256/256 while the division yields 213. The KV cache is
+    /// priced per head with these when present.
+    #[serde(default)]
+    pub attention_key_length: Option<u32>,
+    #[serde(default)]
+    pub attention_value_length: Option<u32>,
+    /// Present on a hybrid model: one full-attention layer every N layers, the
+    /// rest recurrent (SSM / linear attention) with a state that does not grow
+    /// with the context (T-038). `None` means every layer holds a KV cache.
+    #[serde(default)]
+    pub full_attention_interval: Option<u32>,
+    /// The recurrent layers' state geometry, from `{arch}.ssm.*`. All four are
+    /// read together by the estimator's recurrent-state term; a file that
+    /// declares only some of them keeps that term unmodelled rather than
+    /// half-computed (T-038).
+    #[serde(default)]
+    pub ssm_state_size: Option<u32>,
+    #[serde(default)]
+    pub ssm_inner_size: Option<u32>,
+    #[serde(default)]
+    pub ssm_group_count: Option<u32>,
+    #[serde(default)]
+    pub ssm_conv_kernel: Option<u32>,
     pub has_chat_template: bool,
     pub is_moe: bool,
     pub expert_count: Option<u32>,
@@ -380,6 +407,11 @@ pub struct GgufMetadata {
     /// `--spec-type draft-mtp` — it is NOT a draft companion.
     #[serde(default)]
     pub has_mtp_heads: bool,
+    /// How many Multi-Token-Prediction layers the header declares (T-038).
+    /// The draft stage runs them in their own context, whose KV cache the
+    /// estimator prices; `None`/`0` for a model without MTP heads.
+    #[serde(default)]
+    pub mtp_layer_count: Option<u32>,
     /// True when the model's own chat template declares a tool-calling reply
     /// format (T-037). Read from `tokenizer.chat_template`, never from the
     /// filename and never from an architecture list: the template is the
@@ -667,7 +699,30 @@ pub struct EstimateInputs {
     /// The projector (mmproj) file size, if the model has one. Loaded into
     /// VRAM alongside the model; the estimate must account for it.
     pub projector_bytes: u64,
+    /// The draft companion this configuration names, if any (T-038). Its
+    /// memory is a first-class term of the estimate, not an afterthought:
+    /// a main+draft pair that "fits" while the companion is unaccounted for
+    /// is exactly the failure this field exists to prevent.
+    #[serde(default)]
+    pub draft: Option<DraftModelInputs>,
     pub ram_free_bytes: u64,
+}
+
+/// A speculative-decoding draft companion as the estimator sees it (T-038).
+///
+/// Both halves are `Option` on purpose: a companion that has been deleted,
+/// moved, or turned into an unreadable file since it was saved must surface as
+/// an *explicitly unaccounted* term with a note naming the file — never as a
+/// zero that reads like "it costs nothing" (see `docs/TASKS.md` T-038).
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+#[ts(export)]
+pub struct DraftModelInputs {
+    /// Absolute path of the companion, so the estimate can name the file.
+    pub path: PathBuf,
+    /// The companion's file size, or `None` when it could not be measured.
+    pub size_bytes: Option<u64>,
+    /// The companion's own header, or `None` when it could not be read.
+    pub metadata: Option<GgufMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -686,6 +741,18 @@ pub struct VramEstimate {
     pub vram_free_bytes: u64,
     /// The projector (mmproj) file size, if the model has one.
     pub projector_bytes: u64,
+    /// What the draft companion costs in total — its weights plus its own KV
+    /// cache (T-038). `0` means "no companion configured", which is why an
+    /// unmeasurable companion is reported in `notes` rather than as a zero.
+    pub draft_bytes: u64,
+    /// The recurrent (SSM / linear-attention) layers' state of a hybrid model
+    /// (T-038). It does not grow with the context; `0` for a model whose every
+    /// layer holds a KV cache.
+    pub recurrent_state_bytes: u64,
+    /// The KV cache of the Multi-Token-Prediction layers, which llama.cpp runs
+    /// in their own draft context (T-038). `0` when the model does not draft
+    /// with its own MTP heads.
+    pub mtp_draft_bytes: u64,
 }
 
 // `pub fn estimate(...)` (docs/CONTRACTS.md §1) is logic, not a type — T-032's
@@ -980,11 +1047,19 @@ mod tests {
                 embedding_length: Some(4096),
                 attention_head_count: Some(32),
                 attention_head_count_kv: Some(8),
+                attention_key_length: None,
+                attention_value_length: None,
+                full_attention_interval: None,
+                ssm_state_size: None,
+                ssm_inner_size: None,
+                ssm_group_count: None,
+                ssm_conv_kernel: None,
                 has_chat_template: true,
                 is_moe: false,
                 expert_count: None,
                 is_draft_model: false,
                 has_mtp_heads: false,
+                mtp_layer_count: None,
                 supports_tools: false,
                 supports_thinking: false,
             },

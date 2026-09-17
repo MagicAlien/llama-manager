@@ -10,9 +10,13 @@ expression: estimate
   "fits_fully": true,
   "confidence": "Heuristic",
   "notes": [
-    "Conservative margin: 12%"
+    "Conservative margin: 12%",
+    "No layer count chosen: the figures below describe 32 GPU layers"
   ],
   "vram_total_bytes": 51539607552,
   "vram_free_bytes": 51539607552,
-  "projector_bytes": 0
+  "projector_bytes": 0,
+  "draft_bytes": 0,
+  "recurrent_state_bytes": 0,
+  "mtp_draft_bytes": 0
 }

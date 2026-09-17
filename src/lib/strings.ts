@@ -219,13 +219,28 @@ export const strings = {
         dirtyBanner: "Unsaved changes. The next restart uses the last saved settings.",
         projectionTitle: "VRAM projection",
         projectionLayers: "Recommended GPU layers",
-        projectionVram: "Projected VRAM",
+        projectionVram: "Estimated VRAM",
         projectionRam: "Estimated RAM",
         projectionKv: "KV cache",
-        projectionGpuVram: "GPU VRAM",
-        projectionProjector: "Projector",
+        // "Vision", not "Projector": the user-facing name for that file is the
+        // capability it buys, the same word the tag row uses (T-038, owner
+        // decision 17 Sept 2026).
+        projectionVision: "Vision",
+        // T-038 — the terms the estimate accounts for beyond weights and KV.
+        // Each renders only when it applies to the model in front of the user.
+        projectionDraft: "Draft companion",
+        projectionRecurrent: "Recurrent layer state",
+        projectionMtp: "MTP draft cache",
         projectionFits: "Fits fully in VRAM",
         projectionDoesntFit: "Does not fully fit in VRAM",
+        // The two figures the verdict is made of. They are the machine's own
+        // VRAM (NVML, re-read on every estimate), so they never move with the
+        // form: stating them as the *budget the delta is measured against*
+        // keeps them out of the row of costs, where they read as a peer of
+        // terms that do react to the controls.
+        projectionHeadroom: "headroom",
+        projectionOver: "over",
+        projectionFreeOf: "free of",
         projectionNotes: "Notes",
         projectionLoading: "Projecting…",
         // T-036 — speculative decoding. The role is read from the model's

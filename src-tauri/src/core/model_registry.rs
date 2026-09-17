@@ -560,6 +560,178 @@ pub fn backfill_capability_metadata() -> Result<u32, AppError> {
     backfill_capability_metadata_on(&conn)
 }
 
+/// The header-derived fields T-038 added to `GgufMetadata` **and** the shape keys
+/// a pre-T-038 import could not read at all (they were looked up under a fixed
+/// `llama.` prefix and stored as `null`), paired with the JSON key each is
+/// stored under. A table, not thirteen inline inserts: the next header-derived
+/// field is one line here plus its fixture.
+///
+/// The second half matters as much as the first. The estimator reads
+/// `attention_head_count_kv` and the per-head dimensions out of the **stored
+/// row**, so a row left at `null` keeps pricing the cache from the default 8 KV
+/// heads even with the new geometry keys sitting beside it: a repair that filled
+/// only the new keys would look done and leave the installed catalogue exactly as
+/// wrong as before. `null` here means "the old reader could not answer" — never a
+/// user's choice — which is why filling it is correct, and why a value that is
+/// already present is never overwritten.
+fn vram_geometry_fields(
+    parsed: &crate::core::types::GgufMetadata,
+) -> [(&'static str, serde_json::Value); 13] {
+    fn opt(value: Option<u32>) -> serde_json::Value {
+        match value {
+            Some(n) => serde_json::Value::from(n),
+            None => serde_json::Value::Null,
+        }
+    }
+
+    [
+        ("attention_key_length", opt(parsed.attention_key_length)),
+        ("attention_value_length", opt(parsed.attention_value_length)),
+        (
+            "full_attention_interval",
+            opt(parsed.full_attention_interval),
+        ),
+        ("ssm_state_size", opt(parsed.ssm_state_size)),
+        ("ssm_inner_size", opt(parsed.ssm_inner_size)),
+        ("ssm_group_count", opt(parsed.ssm_group_count)),
+        ("ssm_conv_kernel", opt(parsed.ssm_conv_kernel)),
+        ("mtp_layer_count", opt(parsed.mtp_layer_count)),
+        ("context_length", opt(parsed.context_length)),
+        ("embedding_length", opt(parsed.embedding_length)),
+        ("attention_head_count", opt(parsed.attention_head_count)),
+        (
+            "attention_head_count_kv",
+            opt(parsed.attention_head_count_kv),
+        ),
+        ("expert_count", opt(parsed.expert_count)),
+    ]
+}
+
+/// T-038 — repair rows imported before the header-derived geometry fields
+/// existed, exactly as [`backfill_capability_metadata_on`] does for T-037's two
+/// capability flags, and for the same reason.
+///
+/// `metadata_json` is written once at import and never re-derived on read (a
+/// tokenizer table per model per screen is not affordable), so a row that
+/// predates T-038 carries neither `full_attention_interval` nor the per-head
+/// dimensions. `#[serde(default)]` then reports them as `None` — and `None`
+/// means "every layer holds a KV cache", which is the overestimate this task
+/// exists to remove. Re-reading every header on every read is not the fix; this
+/// one-off repair is.
+///
+/// Additive and idempotent: only the missing keys are inserted, a file that is
+/// gone or unreadable leaves its row **exactly as stored** (an anomaly must not
+/// be upgraded into a plausible answer), and a second run returns 0.
+pub fn backfill_vram_metadata_on(conn: &rusqlite::Connection) -> Result<u32, AppError> {
+    let rows = queries::list_models(conn)?;
+    let mut corrected = 0u32;
+
+    for row in &rows {
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&row.metadata_json) else {
+            tracing::warn!(
+                "model {}: stored metadata is not valid JSON; VRAM geometry left as stored",
+                row.id
+            );
+            continue;
+        };
+        let Some(object) = value.as_object_mut() else {
+            tracing::warn!(
+                "model {}: stored metadata is not a JSON object; VRAM geometry left as stored",
+                row.id
+            );
+            continue;
+        };
+        // A row is left alone without re-reading its header only when it carries
+        // every field this repair can supply. `contains_key` alone is not enough:
+        // a row repaired by an earlier run already has `full_attention_interval`
+        // while its shape keys are still `null`, and that row is precisely the one
+        // the estimator misprices.
+        let shape_complete = [
+            "context_length",
+            "embedding_length",
+            "attention_head_count",
+            "attention_head_count_kv",
+        ]
+        .iter()
+        .all(|key| matches!(object.get(*key), Some(value) if !value.is_null()));
+        if object.contains_key("full_attention_interval")
+            && object.contains_key("mtp_layer_count")
+            && shape_complete
+        {
+            continue;
+        }
+
+        let path = Path::new(&row.file_path);
+        if !path.exists() {
+            tracing::debug!(
+                "model {}: {} is not on disk; VRAM geometry left as stored",
+                row.id,
+                row.file_path
+            );
+            continue;
+        }
+        let parsed = match gguf::parse_file(path) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                tracing::warn!(
+                    "model {}: header could not be re-read ({err}); VRAM geometry left as stored",
+                    row.id
+                );
+                continue;
+            }
+        };
+
+        let mut inserted: Vec<&str> = Vec::new();
+        for (key, field) in vram_geometry_fields(&parsed) {
+            // Fill what is missing and what the old reader could not answer
+            // (`null`), never a value that is present: a header-derived field
+            // someone set is not collateral for this repair.
+            let needs_fill = match object.get(key) {
+                None => true,
+                Some(serde_json::Value::Null) => !field.is_null(),
+                Some(_) => false,
+            };
+            if needs_fill {
+                object.insert(key.to_string(), field);
+                inserted.push(key);
+            }
+        }
+        if inserted.is_empty() {
+            continue;
+        }
+
+        let json = serde_json::to_string(&value).map_err(|e| AppError::Internal {
+            message: format!("serialize metadata: {e}"),
+        })?;
+        queries::set_model_metadata(conn, &row.id, &json)?;
+        info!(
+            "backfilled VRAM geometry for {}: {}",
+            row.display_name,
+            inserted.join(", ")
+        );
+        corrected += 1;
+    }
+
+    Ok(corrected)
+}
+
+/// The startup entry point for [`backfill_vram_metadata_on`]. Best-effort, like
+/// its two neighbours: a failure is logged and the app starts anyway.
+pub fn backfill_vram_metadata() -> Result<u32, AppError> {
+    let db_path = database_path().ok_or_else(|| AppError::Internal {
+        message: "could not determine the database path".into(),
+    })?;
+    if let Some(dir) = db_path.parent() {
+        if !dir.exists() {
+            std::fs::create_dir_all(dir).map_err(|e| AppError::Io {
+                message: format!("create database directory {}: {e}", dir.display()),
+            })?;
+        }
+    }
+    let conn = db::open(&db_path)?;
+    backfill_vram_metadata_on(&conn)
+}
+
 /// Save a model's launch params and sampling defaults (`docs/CONTRACTS.md`
 /// §4 `update_model_params`; T-035's detail screen persists through it).
 /// The identity columns (path, metadata, compatibility) are untouched:
@@ -1057,6 +1229,159 @@ mod tests {
 
         // Idempotent: the second pass has nothing left to do.
         assert_eq!(backfill_capability_metadata_on(&conn).unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// T-038 — a catalogue row written before the geometry fields existed must
+    /// gain them at startup: without this, an already-imported hybrid model
+    /// keeps `full_attention_interval: null`, which the estimator reads as
+    /// "every layer holds a KV cache" — the 4× overestimate T-038 removes. The
+    /// installed catalogue is the only thing the screens see, so a code fix
+    /// alone would leave it wrong.
+    #[test]
+    fn test_t038_backfill_repairs_the_stored_geometry_only_and_is_idempotent() {
+        let conn = crate::db::open_in_memory().unwrap();
+
+        let tmp = std::env::temp_dir().join(format!("lm-mgr-t038-backfill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // The owner's real shape, in miniature: a hybrid attention/SSM model
+        // with one MTP layer, all of it arch-prefixed.
+        let hybrid = tmp.join("hybrid.gguf");
+        std::fs::write(
+            &hybrid,
+            minimal_gguf(&[
+                (
+                    "general.architecture",
+                    GgufValue::String("qwen35".to_string()),
+                ),
+                ("qwen35.block_count", GgufValue::UInt32(65)),
+                ("qwen35.embedding_length", GgufValue::UInt32(5120)),
+                ("qwen35.attention.head_count", GgufValue::UInt32(24)),
+                ("qwen35.attention.head_count_kv", GgufValue::UInt32(4)),
+                ("qwen35.attention.key_length", GgufValue::UInt32(256)),
+                ("qwen35.attention.value_length", GgufValue::UInt32(256)),
+                ("qwen35.full_attention_interval", GgufValue::UInt32(4)),
+                ("qwen35.ssm.state_size", GgufValue::UInt32(128)),
+                ("qwen35.ssm.inner_size", GgufValue::UInt32(6144)),
+                ("qwen35.ssm.group_count", GgufValue::UInt32(16)),
+                ("qwen35.ssm.conv_kernel", GgufValue::UInt32(4)),
+                ("qwen35.nextn_predict_layers", GgufValue::UInt32(1)),
+            ]),
+        )
+        .unwrap();
+
+        // A dense model with none of the geometry: every key is inserted as
+        // null, which is the honest reading of a file that declares none.
+        let dense = tmp.join("dense.gguf");
+        std::fs::write(
+            &dense,
+            minimal_gguf(&[
+                (
+                    "general.architecture",
+                    GgufValue::String("llama".to_string()),
+                ),
+                ("llama.block_count", GgufValue::UInt32(32)),
+            ]),
+        )
+        .unwrap();
+
+        let gone = tmp.join("gone.gguf");
+
+        // The metadata as a pre-T-038 import wrote it: no geometry keys, and a
+        // user-visible field (`context_length`) that must survive untouched.
+        let stored_metadata = "{\"architecture\":\"qwen35\",\"param_count\":27000000000,\
+\"quantization\":\"NVFP4\",\"block_count\":65,\"context_length\":200000,\
+\"embedding_length\":null,\"attention_head_count\":null,\"attention_head_count_kv\":null,\
+\"has_chat_template\":true,\"is_moe\":false,\"expert_count\":null,\
+\"is_draft_model\":false,\"has_mtp_heads\":true}"
+            .to_string();
+
+        let mut row = queries::ModelRow {
+            id: "model-hybrid".to_string(),
+            display_name: "hybrid.gguf".to_string(),
+            served_name: "hybrid.gguf".to_string(),
+            file_path: hybrid.to_string_lossy().to_string(),
+            shard_paths_json: "[]".to_string(),
+            size_bytes: 1024,
+            sha256_head: "abc".to_string(),
+            metadata_json: stored_metadata.clone(),
+            compatibility_json: "\"Supported\"".to_string(),
+            availability: "Present".to_string(),
+            launch_params_json: serde_json::to_string(&LaunchParams::default()).unwrap(),
+            sampling_json: serde_json::to_string(&SamplingDefaults::default()).unwrap(),
+            preload: false,
+            pinned: false,
+            added_at: Utc::now(),
+            last_launched_at: None,
+        };
+        queries::insert_model(&conn, &row).unwrap();
+
+        row.id = "model-dense".to_string();
+        row.served_name = "dense.gguf".to_string();
+        row.file_path = dense.to_string_lossy().to_string();
+        queries::insert_model(&conn, &row).unwrap();
+
+        row.id = "model-gone".to_string();
+        row.served_name = "gone.gguf".to_string();
+        row.file_path = gone.to_string_lossy().to_string();
+        queries::insert_model(&conn, &row).unwrap();
+
+        let corrected = backfill_vram_metadata_on(&conn).unwrap();
+        assert_eq!(
+            corrected, 2,
+            "both rows whose file could be re-read are corrected; the missing one is not"
+        );
+
+        let updated = queries::get_model(&conn, "model-hybrid").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&updated.metadata_json).unwrap();
+        assert_eq!(value["full_attention_interval"], serde_json::json!(4));
+        assert_eq!(value["attention_key_length"], serde_json::json!(256));
+        assert_eq!(value["attention_value_length"], serde_json::json!(256));
+        assert_eq!(value["ssm_state_size"], serde_json::json!(128));
+        assert_eq!(value["ssm_inner_size"], serde_json::json!(6144));
+        assert_eq!(value["ssm_group_count"], serde_json::json!(16));
+        assert_eq!(value["ssm_conv_kernel"], serde_json::json!(4));
+        assert_eq!(value["mtp_layer_count"], serde_json::json!(1));
+        // Nothing the row already held was rewritten.
+        assert_eq!(value["context_length"], serde_json::json!(200000));
+        assert_eq!(value["quantization"], serde_json::json!("NVFP4"));
+        // The keys the old reader could not answer are filled from the header:
+        // a repair that only added the new keys would leave
+        // `attention_head_count_kv` at `null`, and the estimator would keep
+        // pricing the cache with the default 8 KV heads instead of the file's 4.
+        assert_eq!(value["embedding_length"], serde_json::json!(5120));
+        assert_eq!(value["attention_head_count"], serde_json::json!(24));
+        assert_eq!(value["attention_head_count_kv"], serde_json::json!(4));
+
+        // The reading the screens do now carries the geometry, so the
+        // projection is computed from the file rather than from defaults.
+        let entry = model_entry_from_row(updated).unwrap();
+        assert_eq!(entry.metadata.full_attention_interval, Some(4));
+        assert_eq!(entry.metadata.attention_key_length, Some(256));
+        assert_eq!(entry.metadata.mtp_layer_count, Some(1));
+
+        // A model that is not on disk is left exactly as stored, not guessed.
+        let gone_row = queries::get_model(&conn, "model-gone").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&gone_row.metadata_json).unwrap();
+        assert!(
+            value.get("full_attention_interval").is_none(),
+            "a file that cannot be re-read must not gain a plausible-looking answer"
+        );
+
+        // A file that declares no shape keys gains none invented: the repair
+        // reports the header, it does not fill a plausible value.
+        let dense_row = queries::get_model(&conn, "model-dense").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&dense_row.metadata_json).unwrap();
+        assert!(
+            value["embedding_length"].is_null(),
+            "a header without embedding_length must not become a number"
+        );
+
+        // Idempotent: the second pass has nothing left to do.
+        assert_eq!(backfill_vram_metadata_on(&conn).unwrap(), 0);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
