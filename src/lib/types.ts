@@ -91,6 +91,29 @@ architecture: string,
  */
 spec_type: string, size_bytes: bigint, block_count: number, quantization: string, };
 
+// ---- DraftModelInputs ----
+/**
+ * A speculative-decoding draft companion as the estimator sees it (T-038).
+ *
+ * Both halves are `Option` on purpose: a companion that has been deleted,
+ * moved, or turned into an unreadable file since it was saved must surface as
+ * an *explicitly unaccounted* term with a note naming the file — never as a
+ * zero that reads like "it costs nothing" (see `docs/TASKS.md` T-038).
+ */
+export type DraftModelInputs = { 
+/**
+ * Absolute path of the companion, so the estimate can name the file.
+ */
+path: string, 
+/**
+ * The companion's file size, or `None` when it could not be measured.
+ */
+size_bytes: bigint | null, 
+/**
+ * The companion's own header, or `None` when it could not be read.
+ */
+metadata: GgufMetadata | null, };
+
 // ---- EndpointState ----
 /**
  * The listener's lifecycle is independent of `ServerState` — that
@@ -112,7 +135,14 @@ export type EstimateInputs = { metadata: GgufMetadata, file_size_bytes: bigint, 
  * The projector (mmproj) file size, if the model has one. Loaded into
  * VRAM alongside the model; the estimate must account for it.
  */
-projector_bytes: bigint, ram_free_bytes: bigint, };
+projector_bytes: bigint, 
+/**
+ * The draft companion this configuration names, if any (T-038). Its
+ * memory is a first-class term of the estimate, not an afterthought:
+ * a main+draft pair that "fits" while the companion is unaccounted for
+ * is exactly the failure this field exists to prevent.
+ */
+draft: DraftModelInputs | null, ram_free_bytes: bigint, };
 
 // ---- FlashAttn ----
 /**
@@ -142,7 +172,29 @@ block_count: number, context_length: number | null, embedding_length: number | n
  * of magnitude. When either is absent the estimator says so in its
  * notes rather than assuming they are equal.
  */
-attention_head_count: number | null, attention_head_count_kv: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, 
+attention_head_count: number | null, attention_head_count_kv: number | null, 
+/**
+ * Per-head dimensions, from `{arch}.attention.key_length` /
+ * `{arch}.attention.value_length` (T-038). These are what llama.cpp itself
+ * uses for `n_embd_head_k` / `n_embd_head_v`, and they are not always
+ * `embedding_length / attention_head_count`: on the owner's real Qwen3.8
+ * files they are 256/256 while the division yields 213. The KV cache is
+ * priced per head with these when present.
+ */
+attention_key_length: number | null, attention_value_length: number | null, 
+/**
+ * Present on a hybrid model: one full-attention layer every N layers, the
+ * rest recurrent (SSM / linear attention) with a state that does not grow
+ * with the context (T-038). `None` means every layer holds a KV cache.
+ */
+full_attention_interval: number | null, 
+/**
+ * The recurrent layers' state geometry, from `{arch}.ssm.*`. All four are
+ * read together by the estimator's recurrent-state term; a file that
+ * declares only some of them keeps that term unmodelled rather than
+ * half-computed (T-038).
+ */
+ssm_state_size: number | null, ssm_inner_size: number | null, ssm_group_count: number | null, ssm_conv_kernel: number | null, has_chat_template: boolean, is_moe: boolean, expert_count: number | null, 
 /**
  * True when the architecture is a speculative-decoding DRAFT model
  * (DFlash, DSpark, EAGLE, ...). Draft models are companions used with
@@ -158,6 +210,12 @@ is_draft_model: boolean,
  * `--spec-type draft-mtp` — it is NOT a draft companion.
  */
 has_mtp_heads: boolean, 
+/**
+ * How many Multi-Token-Prediction layers the header declares (T-038).
+ * The draft stage runs them in their own context, whose KV cache the
+ * estimator prices; `None`/`0` for a model without MTP heads.
+ */
+mtp_layer_count: number | null, 
 /**
  * True when the model's own chat template declares a tool-calling reply
  * format (T-037). Read from `tokenizer.chat_template`, never from the
@@ -488,7 +546,25 @@ vram_free_bytes: bigint,
 /**
  * The projector (mmproj) file size, if the model has one.
  */
-projector_bytes: bigint, };
+projector_bytes: bigint, 
+/**
+ * What the draft companion costs in total — its weights plus its own KV
+ * cache (T-038). `0` means "no companion configured", which is why an
+ * unmeasurable companion is reported in `notes` rather than as a zero.
+ */
+draft_bytes: bigint, 
+/**
+ * The recurrent (SSM / linear-attention) layers' state of a hybrid model
+ * (T-038). It does not grow with the context; `0` for a model whose every
+ * layer holds a KV cache.
+ */
+recurrent_state_bytes: bigint, 
+/**
+ * The KV cache of the Multi-Token-Prediction layers, which llama.cpp runs
+ * in their own draft context (T-038). `0` when the model does not draft
+ * with its own MTP heads.
+ */
+mtp_draft_bytes: bigint, };
 
 // ---- WatchedFolder ----
 export type WatchedFolder = { path: string, model_count: number, reachable: boolean, last_scan_at: string | null, };

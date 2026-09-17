@@ -59,23 +59,50 @@ fn ftype_label(v: u32) -> String {
     label.to_string()
 }
 
-/// Architecture-specific layer count key.
-/// The KV key carrying the block (layer) count for an architecture. The
-/// GGUF convention prefixes every per-arch key with the architecture
-/// string itself: `llama.block_count`, `qwen35.block_count`, ... — llama.cpp
-/// reads `<arch>.block_count` generically, never a fixed `llama.` prefix.
-/// The table below exists only for the (none, today) archs that deviate;
-/// everything else uses the arch-prefixed key. The old fallback returned
-/// `llama.block_count` for unknown archs, so a real Qwen3-35B
-/// (`general.architecture = qwen35`) parsed with block_count = 0.
-fn layer_count_key(arch: &str) -> String {
-    match arch {
-        "llama" | "mistral" | "qwen" | "qwen3" | "gemma" | "gemma2" | "phi" | "phi3"
-        | "mixtral" | "deepseek2" | "llama4" | "smollm" | "stablelm" => {
-            format!("{arch}.block_count")
-        }
-        other => format!("{other}.block_count"),
+/// The GGUF convention prefixes every per-architecture key with the
+/// architecture string itself: `llama.block_count`, `qwen35.block_count`,
+/// `qwen35.attention.head_count_kv`, … — llama.cpp reads `<arch>.<suffix>`
+/// generically, never with a fixed `llama.` prefix.
+///
+/// The reader used to read a fixed `llama.` name for the shape keys
+/// (`llama.block_count`, `llama.embedding_length`,
+/// `llama.attention.head_count`, `llama.attention.head_count_kv`) with a
+/// bare-name fallback. On the owner's real files
+/// (`general.architecture = qwen35`) that returned `block_count = 0` for the
+/// first key and left the other three at `None`, so the estimator's KV term
+/// fell back to a per-architecture default instead of the model's own GQA
+/// ratio. Verified against the files themselves: they carry
+/// `qwen35.embedding_length = 5120`, `qwen35.attention.head_count = 24`,
+/// `qwen35.attention.head_count_kv = 4` (PROGRESS.md F-019).
+///
+/// The bare-suffix fallback is kept for a writer that omits the prefix — the
+/// arch-prefixed key is always tried first.
+fn arch_key(arch: &str, suffix: &str) -> String {
+    format!("{arch}.{suffix}")
+}
+
+/// Coerce any integer-typed GGUF value to `u32`.
+fn as_u32(value: &GgufValue) -> Option<u32> {
+    match value {
+        GgufValue::UInt32(n) => Some(*n),
+        GgufValue::Int32(n) => Some(*n as u32),
+        GgufValue::UInt64(n) => Some(*n as u32),
+        GgufValue::Int64(n) => Some(*n as u32),
+        _ => None,
     }
+}
+
+/// Read an integer stored under `<arch>.<suffix>`, falling back to the bare
+/// `<suffix>` key. `None` when neither key is present, or when the value it
+/// carries is not an integer type.
+fn arch_u32(
+    kv: &std::collections::HashMap<String, GgufValue>,
+    arch: &str,
+    suffix: &str,
+) -> Option<u32> {
+    kv.get(arch_key(arch, suffix).as_str())
+        .or_else(|| kv.get(suffix))
+        .and_then(as_u32)
 }
 
 /// Read the GGUF header (magic, version, tensor count, KV count).
@@ -483,60 +510,40 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         .map(ftype_label)
         .unwrap_or_else(|| "unknown".to_string());
 
-    let block_count = kv
-        .get(layer_count_key(&architecture).as_str())
-        .and_then(|v| match v {
-            GgufValue::UInt32(n) => Some(*n),
-            GgufValue::Int32(n) => Some(*n as u32),
-            GgufValue::UInt64(n) => Some(*n as u32),
-            GgufValue::Int64(n) => Some(*n as u32),
-            _ => None,
-        })
-        .unwrap_or(0);
+    let block_count = arch_u32(&kv, &architecture, "block_count").unwrap_or(0);
 
-    let context_length = kv
-        .get("llama.context_length")
-        .or_else(|| kv.get("context_length"))
-        .and_then(|v| match v {
-            GgufValue::UInt32(n) => Some(*n),
-            GgufValue::Int32(n) => Some(*n as u32),
-            GgufValue::UInt64(n) => Some(*n as u32),
-            GgufValue::Int64(n) => Some(*n as u32),
-            _ => None,
-        });
+    let context_length = arch_u32(&kv, &architecture, "context_length");
 
-    let embedding_length = kv
-        .get("llama.embedding_length")
-        .or_else(|| kv.get("embedding_length"))
-        .and_then(|v| match v {
-            GgufValue::UInt32(n) => Some(*n),
-            GgufValue::Int32(n) => Some(*n as u32),
-            GgufValue::UInt64(n) => Some(*n as u32),
-            GgufValue::Int64(n) => Some(*n as u32),
-            _ => None,
-        });
+    let embedding_length = arch_u32(&kv, &architecture, "embedding_length");
 
-    let attention_head_count = kv
-        .get("llama.attention.head_count")
-        .or_else(|| kv.get("attention.head_count"))
-        .and_then(|v| match v {
-            GgufValue::UInt32(n) => Some(*n),
-            GgufValue::Int32(n) => Some(*n as u32),
-            GgufValue::UInt64(n) => Some(*n as u32),
-            GgufValue::Int64(n) => Some(*n as u32),
-            _ => None,
-        });
+    let attention_head_count = arch_u32(&kv, &architecture, "attention.head_count");
 
-    let attention_head_count_kv = kv
-        .get("llama.attention.head_count_kv")
-        .or_else(|| kv.get("attention.head_count_kv"))
-        .and_then(|v| match v {
-            GgufValue::UInt32(n) => Some(*n),
-            GgufValue::Int32(n) => Some(*n as u32),
-            GgufValue::UInt64(n) => Some(*n as u32),
-            GgufValue::Int64(n) => Some(*n as u32),
-            _ => None,
-        });
+    let attention_head_count_kv = arch_u32(&kv, &architecture, "attention.head_count_kv");
+
+    // T-038 — the per-head dimensions. `attention.key_length` /
+    // `attention.value_length` are what llama.cpp itself uses for
+    // `n_embd_head_k` / `n_embd_head_v`; on the owner's real Qwen3.8 files they
+    // are 256/256, while `embedding_length / attention_head_count` is
+    // 5120 / 24 = 213 (integer division of a value that is not a multiple).
+    // The KV cache is priced per head with these, which is why the estimator
+    // prefers them and only falls back to the division.
+    let attention_key_length = arch_u32(&kv, &architecture, "attention.key_length");
+    let attention_value_length = arch_u32(&kv, &architecture, "attention.value_length");
+
+    // T-038 — a hybrid model declares how often a full-attention layer occurs.
+    // Every layer between them is a recurrent (SSM/linear-attention) layer
+    // whose state does not grow with the context. Measured on the real build:
+    // `full_attention_interval = 4` with `block_count = 65` gives exactly 16 KV
+    // layers, and the 48 others are recurrent (PROGRESS.md F-019).
+    let full_attention_interval = arch_u32(&kv, &architecture, "full_attention_interval");
+
+    // The recurrent-state geometry, read only when the file declares it. These
+    // are the keys llama.cpp itself reads for a Mamba-style layer, and the
+    // estimator sizes that layer's state from them (F-019).
+    let ssm_state_size = arch_u32(&kv, &architecture, "ssm.state_size");
+    let ssm_inner_size = arch_u32(&kv, &architecture, "ssm.inner_size");
+    let ssm_group_count = arch_u32(&kv, &architecture, "ssm.group_count");
+    let ssm_conv_kernel = arch_u32(&kv, &architecture, "ssm.conv_kernel");
 
     let has_chat_template = chat_template(&kv).is_some();
 
@@ -569,29 +576,21 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         }
     }
 
+    // T-038 — the same arch-prefix rule applies to the MoE keys: a real
+    // `mixtral`/`qwen3moe` file declares `{arch}.expert_count`, so reading a
+    // fixed `llama.expert_count` reported every MoE model as dense.
+    let expert_count = arch_u32(&kv, &architecture, "expert_count");
+
     let is_moe = architecture == "mixtral"
         || architecture == "deepseek2"
-        || kv
-            .get("llama.expert_count")
-            .and_then(|v| match v {
-                GgufValue::UInt32(n) => Some(*n > 1),
-                GgufValue::Int32(n) => Some(*n > 1),
-                GgufValue::UInt64(n) => Some(*n > 1),
-                GgufValue::Int64(n) => Some(*n > 1),
-                _ => None,
-            })
-            .unwrap_or(false);
-
-    let expert_count = kv.get("llama.expert_count").and_then(|v| match v {
-        GgufValue::UInt32(n) => Some(*n),
-        GgufValue::Int32(n) => Some(*n as u32),
-        GgufValue::UInt64(n) => Some(*n as u32),
-        GgufValue::Int64(n) => Some(*n as u32),
-        _ => None,
-    });
+        || expert_count.is_some_and(|n| n > 1);
 
     let is_draft_model = is_draft_architecture(&architecture);
-    let has_mtp_heads = has_mtp_heads(&architecture, &kv);
+    // T-038 — the count, not just the presence: the estimator prices the extra
+    // draft layer's KV cache from it. `has_mtp_heads` keeps T-036's meaning
+    // ("the file declares Multi-Token-Prediction layers").
+    let mtp_layer_count = arch_u32(&kv, &architecture, "nextn_predict_layers");
+    let has_mtp_heads = mtp_layer_count.is_some_and(|n| n > 0);
 
     Ok(GgufMetadata {
         architecture,
@@ -602,11 +601,19 @@ pub fn parse_metadata<R: Read + Seek>(mut reader: R) -> Result<GgufMetadata, App
         embedding_length,
         attention_head_count,
         attention_head_count_kv,
+        attention_key_length,
+        attention_value_length,
+        full_attention_interval,
+        ssm_state_size,
+        ssm_inner_size,
+        ssm_group_count,
+        ssm_conv_kernel,
         has_chat_template,
         is_moe,
         expert_count,
         is_draft_model,
         has_mtp_heads,
+        mtp_layer_count,
         supports_tools,
         supports_thinking,
     })
@@ -691,16 +698,6 @@ const DRAFT_ARCHITECTURES: &[&str] = &[
 /// Detect whether an architecture is a speculative-decoding draft model.
 pub fn is_draft_architecture(arch: &str) -> bool {
     DRAFT_ARCHITECTURES.contains(&arch.to_lowercase().as_str())
-}
-
-/// Detect whether a GGUF carries Multi-Token-Prediction heads.
-/// MTP models are COMPLETE models that can additionally draft tokens via
-/// `--spec-type draft-mtp` — they are NOT draft companions.
-pub fn has_mtp_heads(
-    architecture: &str,
-    metadata: &std::collections::HashMap<String, GgufValue>,
-) -> bool {
-    metadata.contains_key(&format!("{architecture}.nextn_predict_layers"))
 }
 
 /// The chat template the file itself carries (`tokenizer.chat_template`) —
@@ -1214,7 +1211,7 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("dflash".to_string()),
             ),
-            ("llama.block_count", GgufValue::UInt32(16)),
+            ("dflash.block_count", GgufValue::UInt32(16)),
         ];
         let data = make_gguf_bytes(0, kv);
         let meta = parse_metadata(Cursor::new(data)).unwrap();
@@ -1250,7 +1247,7 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("qwen3".to_string()),
             ),
-            ("llama.block_count", GgufValue::UInt32(64)),
+            ("qwen3.block_count", GgufValue::UInt32(64)),
             ("qwen3.nextn_predict_layers", GgufValue::UInt32(1)),
         ];
         let data = make_gguf_bytes(0, kv);
@@ -1270,7 +1267,7 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("qwen3".to_string()),
             ),
-            ("llama.block_count", GgufValue::UInt32(64)),
+            ("qwen3.block_count", GgufValue::UInt32(64)),
         ];
         let data = make_gguf_bytes(0, kv);
         let meta = parse_metadata(Cursor::new(data)).unwrap();
@@ -1290,7 +1287,7 @@ mod tests {
                 "general.architecture",
                 GgufValue::String("eagle3".to_string()),
             ),
-            ("llama.block_count", GgufValue::UInt32(10)),
+            ("eagle3.block_count", GgufValue::UInt32(10)),
         ];
         let data = make_gguf_bytes(0, kv);
         let meta = parse_metadata(Cursor::new(data)).unwrap();
@@ -1590,8 +1587,8 @@ mod tests {
             ),
             // FTYPE 7 = Q8_0
             ("general.file_type", GgufValue::UInt32(7)),
-            ("llama.block_count", GgufValue::UInt32(32)),
-            ("llama.expert_count", GgufValue::UInt32(8)),
+            ("mixtral.block_count", GgufValue::UInt32(32)),
+            ("mixtral.expert_count", GgufValue::UInt32(8)),
         ];
         let data = make_gguf_bytes(0, kv);
         let meta = parse_metadata(Cursor::new(data)).unwrap();
@@ -1736,6 +1733,112 @@ mod tests {
         let meta = parse_file(&path).expect("should parse phi fixture");
         assert_eq!(meta.architecture, "phi3");
         assert_eq!(meta.embedding_length, Some(3072));
+    }
+
+    #[test]
+    fn test_t038_shape_keys_are_read_from_the_arch_prefix() {
+        // T-038 acceptance: the three fields the KV-cache term needs, on a file
+        // whose architecture is not `llama`. The owner's real Qwen3.8 files
+        // declare exactly these keys (`qwen35.…`), and reading a fixed
+        // `llama.` name returned `None` for all three — which is what made the
+        // estimate fall back to a default KV head count and misprice the cache.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("qwen35".to_string()),
+            ),
+            ("qwen35.block_count", GgufValue::UInt32(65)),
+            ("qwen35.context_length", GgufValue::UInt32(262_144)),
+            ("qwen35.embedding_length", GgufValue::UInt32(5120)),
+            ("qwen35.attention.head_count", GgufValue::UInt32(24)),
+            ("qwen35.attention.head_count_kv", GgufValue::UInt32(4)),
+        ];
+        let meta = parse_metadata(Cursor::new(make_gguf_bytes(0, kv))).unwrap();
+        assert_eq!(meta.block_count, 65);
+        assert_eq!(meta.context_length, Some(262_144));
+        assert_eq!(meta.embedding_length, Some(5120));
+        assert_eq!(meta.attention_head_count, Some(24));
+        assert_eq!(meta.attention_head_count_kv, Some(4));
+    }
+
+    #[test]
+    fn test_t038_a_wrong_prefix_is_not_a_fallback() {
+        // The other half of the same rule. `llama.embedding_length` inside a
+        // `gemma` file is not a dialect to be accommodated: it is a file no
+        // writer produces, and it is what this repo's own fixtures used to
+        // contain (regenerated in T-038 — see the gemma fixture test below).
+        // Reading it anyway would have hidden the bug this task exists to fix.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("gemma".to_string()),
+            ),
+            ("llama.block_count", GgufValue::UInt32(32)),
+            ("llama.embedding_length", GgufValue::UInt32(3072)),
+        ];
+        let meta = parse_metadata(Cursor::new(make_gguf_bytes(0, kv))).unwrap();
+        assert_eq!(meta.block_count, 0);
+        assert_eq!(meta.embedding_length, None);
+    }
+
+    #[test]
+    fn test_t038_bare_suffix_keys_still_read() {
+        // A writer that omits the architecture prefix entirely is still
+        // readable — that is what the bare-suffix fallback is for, and it is
+        // tried second, never first.
+        let kv = vec![
+            (
+                "general.architecture",
+                GgufValue::String("mystery".to_string()),
+            ),
+            ("block_count", GgufValue::UInt32(12)),
+            ("embedding_length", GgufValue::UInt32(2048)),
+            ("attention.head_count_kv", GgufValue::UInt32(2)),
+        ];
+        let meta = parse_metadata(Cursor::new(make_gguf_bytes(0, kv))).unwrap();
+        assert_eq!(meta.block_count, 12);
+        assert_eq!(meta.embedding_length, Some(2048));
+        assert_eq!(meta.attention_head_count_kv, Some(2));
+    }
+
+    #[test]
+    fn test_t038_gemma_fixture_uses_its_own_prefix() {
+        // The committed fixture was regenerated in T-038: it now carries
+        // `gemma.…` keys, the way a real file does. Before that it carried
+        // `llama.…` under a `gemma` architecture, so the fixture and the
+        // reader agreed with each other rather than with reality.
+        let path = fixtures_dir().join("google-gemma-Q4_K_M.gguf");
+        let meta = parse_file(&path).expect("should parse gemma fixture");
+        assert_eq!(meta.architecture, "gemma");
+        assert_eq!(meta.block_count, 32);
+        assert_eq!(meta.context_length, Some(4096));
+        assert_eq!(meta.embedding_length, Some(3072));
+        assert_eq!(meta.attention_head_count, Some(32));
+        assert_eq!(meta.attention_head_count_kv, Some(1));
+    }
+
+    #[test]
+    fn test_t038_hybrid_fixture_carries_the_estimator_geometry() {
+        // The same shape as the owner's real Qwen3.8-27B file: a hybrid
+        // attention/SSM model with MTP layers. Every field the estimator's
+        // T-038 terms are built from is read here.
+        let path = fixtures_dir().join("synthetic-Qwen3.8-27B-Hybrid-NVFP4.gguf");
+        let meta = parse_file(&path).expect("should parse hybrid fixture");
+        assert_eq!(meta.architecture, "qwen35");
+        assert_eq!(meta.block_count, 65);
+        assert_eq!(meta.embedding_length, Some(5120));
+        assert_eq!(meta.attention_head_count, Some(24));
+        assert_eq!(meta.attention_head_count_kv, Some(4));
+        assert_eq!(meta.attention_key_length, Some(256));
+        assert_eq!(meta.attention_value_length, Some(256));
+        assert_eq!(meta.full_attention_interval, Some(4));
+        assert_eq!(meta.ssm_state_size, Some(128));
+        assert_eq!(meta.ssm_inner_size, Some(6144));
+        assert_eq!(meta.ssm_group_count, Some(16));
+        assert_eq!(meta.ssm_conv_kernel, Some(4));
+        assert_eq!(meta.mtp_layer_count, Some(1));
+        assert!(meta.has_mtp_heads);
+        assert!(!meta.is_draft_model);
     }
 
     #[test]
@@ -1972,7 +2075,7 @@ mod tests {
                             "general.architecture",
                             GgufValue::String("dflash".to_string()),
                         ),
-                        ("llama.block_count", GgufValue::UInt32(8)),
+                        ("dflash.block_count", GgufValue::UInt32(8)),
                     ],
                 ),
             )
@@ -2002,6 +2105,24 @@ mod tests {
             assert!(!meta.architecture.is_empty());
             assert!(!meta.quantization.is_empty());
             assert!(meta.block_count > 0);
+            // T-038 acceptance: for a real file whose architecture is not
+            // `llama`, the shape keys are arch-prefixed and the reader must
+            // return them. They used to come back `None` here, which is what
+            // sent the KV-cache term to a per-architecture default.
+            if meta.architecture != "llama" {
+                assert!(
+                    meta.embedding_length.is_some()
+                        && meta.attention_head_count.is_some()
+                        && meta.attention_head_count_kv.is_some(),
+                    "a real non-llama file declares {}.embedding_length / \
+                     {}.attention.head_count(_kv): got embedding={:?} heads={:?} kv_heads={:?}",
+                    meta.architecture,
+                    meta.architecture,
+                    meta.embedding_length,
+                    meta.attention_head_count,
+                    meta.attention_head_count_kv
+                );
+            }
             eprintln!(
                 "parsed real GGUF: {} {} {} blocks params={:?} draft={} mtp={} tools={} thinking={}",
                 meta.architecture,
@@ -2012,6 +2133,22 @@ mod tests {
                 meta.has_mtp_heads,
                 meta.supports_tools,
                 meta.supports_thinking
+            );
+            eprintln!(
+                "T-038 geometry: ctx={:?} emb={:?} heads={:?} kv_heads={:?} key_len={:?} \
+                 value_len={:?} attn_interval={:?} ssm=({:?},{:?},{:?},{:?}) mtp_layers={:?}",
+                meta.context_length,
+                meta.embedding_length,
+                meta.attention_head_count,
+                meta.attention_head_count_kv,
+                meta.attention_key_length,
+                meta.attention_value_length,
+                meta.full_attention_interval,
+                meta.ssm_state_size,
+                meta.ssm_inner_size,
+                meta.ssm_group_count,
+                meta.ssm_conv_kernel,
+                meta.mtp_layer_count,
             );
         } else {
             eprintln!("LLAMA_MANAGER_REAL_GGUF not set, skipping");

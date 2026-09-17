@@ -224,6 +224,11 @@ export const strings = {
         projectionKv: "KV cache",
         projectionGpuVram: "GPU VRAM",
         projectionProjector: "Projector",
+        // T-038 — the terms the estimate accounts for beyond weights and KV.
+        // Each renders only when it applies to the model in front of the user.
+        projectionDraft: "Draft companion",
+        projectionRecurrent: "Recurrent layer state",
+        projectionMtp: "MTP draft cache",
         projectionFits: "Fits fully in VRAM",
         projectionDoesntFit: "Does not fully fit in VRAM",
         projectionNotes: "Notes",

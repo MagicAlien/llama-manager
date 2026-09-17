@@ -103,6 +103,9 @@ vi.mock("@/lib/ipc", () => ({
     vram_free_bytes: 2000,
     vram_total_bytes: 4000,
     projector_bytes: 0,
+    draft_bytes: 0,
+    recurrent_state_bytes: 0,
+    mtp_draft_bytes: 0,
     fits_fully: true,
     notes: [],
   }),
@@ -324,5 +327,48 @@ describe("ModelDetailScreen — T-037 capability tags", () => {
     for (const label of ["Thinking", "MTP", "Vision", "Tool use"]) {
       expect(screen.queryByText(label)).toBeNull();
     }
+  });
+});
+
+describe("ModelDetailScreen — T-038 projection terms", () => {
+  it("shows the draft, recurrent and MTP terms only when they cost something", async () => {
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue({
+      recommended_gpu_layers: 65,
+      estimated_vram_bytes: 20_000_000_000,
+      estimated_ram_bytes: 1_000_000_000,
+      kv_cache_bytes: 512_000_000,
+      vram_free_bytes: 32_000_000_000,
+      vram_total_bytes: 32_000_000_000,
+      projector_bytes: 0,
+      // The owner's real hybrid model: a companion, 588 MiB of recurrent
+      // state, and the MTP draft layer's own cache.
+      draft_bytes: 1_104_831_776,
+      recurrent_state_bytes: 616_562_688,
+      mtp_draft_bytes: 2_097_152,
+      fits_fully: true,
+      notes: [],
+    });
+
+    render(<ModelDetailScreen />);
+
+    expect(await screen.findByText("Draft companion: 1.0 GB")).toBeTruthy();
+    expect(screen.getByText("Recurrent layer state: 588 MB")).toBeTruthy();
+    expect(screen.getByText("MTP draft cache: 2 MB")).toBeTruthy();
+  });
+
+  it("renders none of those rows for a dense model", async () => {
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+
+    render(<ModelDetailScreen />);
+
+    expect(await screen.findByText("Test Model")).toBeTruthy();
+    // The mock above leaves all three at zero; a placeholder row for a term
+    // that does not apply would read as a bug (UI rule: no fake information).
+    expect(screen.queryByText(/^Draft companion/)).toBeNull();
+    expect(screen.queryByText(/^Recurrent layer state/)).toBeNull();
+    expect(screen.queryByText(/^MTP draft cache/)).toBeNull();
   });
 });

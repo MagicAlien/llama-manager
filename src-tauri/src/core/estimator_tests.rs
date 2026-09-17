@@ -6,7 +6,7 @@
 
 use crate::core::estimator::estimate;
 use crate::core::types::{
-    EstimateConfidence, EstimateInputs, GgufMetadata, LaunchParams, LaunchRecord,
+    DraftModelInputs, EstimateConfidence, EstimateInputs, GgufMetadata, LaunchParams, LaunchRecord,
 };
 use chrono::Utc;
 use std::path::PathBuf;
@@ -21,11 +21,19 @@ fn make_metadata(architecture: &str, quantization: &str, block_count: u32) -> Gg
         embedding_length: Some(4096),
         attention_head_count: Some(32),
         attention_head_count_kv: Some(8),
+        attention_key_length: None,
+        attention_value_length: None,
+        full_attention_interval: None,
+        ssm_state_size: None,
+        ssm_inner_size: None,
+        ssm_group_count: None,
+        ssm_conv_kernel: None,
         has_chat_template: false,
         is_moe: false,
         expert_count: None,
         is_draft_model: false,
         has_mtp_heads: false,
+        mtp_layer_count: None,
         supports_tools: false,
         supports_thinking: false,
     }
@@ -39,6 +47,7 @@ fn make_inputs(metadata: GgufMetadata, file_size: u64, vram_free: u64) -> Estima
         vram_free_bytes: vram_free,
         vram_total_bytes: vram_free,
         projector_bytes: 0,
+        draft: None,
         ram_free_bytes: 16 * 1024 * 1024 * 1024,
     }
 }
@@ -241,9 +250,13 @@ fn test_missing_embedding_length() {
     metadata.embedding_length = None;
     let inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
     let estimate = estimate(&inputs, &[]);
-    // Should use default head_dim and note it
-    let has_note = estimate.notes.iter().any(|n| n.contains("head_dim"));
-    assert!(has_note, "Should note the assumed head_dim");
+    // With no declared per-head lengths and no usable division, the dimension
+    // is assumed and the note says so (T-038 wording).
+    let has_note = estimate
+        .notes
+        .iter()
+        .any(|n| n.contains("Assumed head dimension"));
+    assert!(has_note, "Should note the assumed head dimension");
 }
 
 #[test]
@@ -252,8 +265,11 @@ fn test_missing_attention_head_count() {
     metadata.attention_head_count = None;
     let inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
     let estimate = estimate(&inputs, &[]);
-    let has_note = estimate.notes.iter().any(|n| n.contains("head_dim"));
-    assert!(has_note, "Should note the assumed head_dim");
+    let has_note = estimate
+        .notes
+        .iter()
+        .any(|n| n.contains("Assumed head dimension"));
+    assert!(has_note, "Should note the assumed head dimension");
 }
 
 // ─── Cache type quantization effect ─────────────────────────────────────────
@@ -469,4 +485,304 @@ fn snapshot_gqa_llama_q4_k_m_7b() {
     let inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
     let estimate = estimate(&inputs, &[]);
     insta::assert_json_snapshot!(estimate);
+}
+
+// ─── T-038: KV-cache accuracy and speculative-decoding memory accounting ────
+//
+// Every expected number below was measured on the pinned build (b10883) loading
+// the owner's real Qwen3.8-27B, reading its own `llama_kv_cache` and
+// `llama_memory_recurrent` reports — PROGRESS.md F-019. Where a test's
+// expectation is a measurement rather than a derivation, the comment says so.
+
+/// A hybrid model (Qwen3-Next style) with MTP layers: the shape of all three of
+/// the owner's real files.
+fn hybrid_metadata() -> GgufMetadata {
+    let mut metadata = make_metadata("qwen35", "NVFP4", 65);
+    metadata.param_count = Some(27_000_000_000);
+    metadata.context_length = Some(262_144);
+    metadata.embedding_length = Some(5120);
+    metadata.attention_head_count = Some(24);
+    metadata.attention_head_count_kv = Some(4);
+    metadata.attention_key_length = Some(256);
+    metadata.attention_value_length = Some(256);
+    metadata.full_attention_interval = Some(4);
+    metadata.ssm_state_size = Some(128);
+    metadata.ssm_inner_size = Some(6144);
+    metadata.ssm_group_count = Some(16);
+    metadata.ssm_conv_kernel = Some(4);
+    metadata.has_mtp_heads = true;
+    metadata.mtp_layer_count = Some(1);
+    metadata
+}
+
+/// The draft companion's own header: the owner's real DFlash2 file.
+fn companion_metadata() -> GgufMetadata {
+    let mut metadata = make_metadata("dflash", "NVFP4", 5);
+    metadata.param_count = Some(1_900_000_000);
+    metadata.context_length = Some(262_144);
+    metadata.embedding_length = Some(5120);
+    metadata.attention_head_count = Some(32);
+    metadata.attention_head_count_kv = Some(8);
+    metadata.attention_key_length = Some(128);
+    metadata.attention_value_length = Some(128);
+    metadata.is_draft_model = true;
+    metadata
+}
+
+#[test]
+fn test_t038_kv_term_uses_the_kv_head_count_not_the_query_head_count() {
+    // Acceptance: "the KV-cache term of a GQA model uses
+    // attention_head_count_kv, never attention_head_count — asserted
+    // term-by-term against a hand-computed value for a model with an 8:1 ratio".
+    // Here the ratio is 32 : 4 = 8 : 1.
+    let mut metadata = make_metadata("llama", "Q4_K_M", 32);
+    metadata.attention_head_count = Some(32);
+    metadata.attention_head_count_kv = Some(4);
+    metadata.attention_key_length = Some(128);
+    metadata.attention_value_length = Some(128);
+
+    let mut inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
+    inputs.params.gpu_layers = Some(32);
+    inputs.params.ctx_size = Some(8192);
+    inputs.params.cache_type_k = Some("f16".to_string());
+    inputs.params.cache_type_v = Some("f16".to_string());
+
+    let estimate = estimate(&inputs, &[]);
+
+    // Hand-computed: ctx 8192 × 32 layers × 4 KV heads × (128×2 + 128×2) bytes
+    let expected = 8192u64 * 32 * 4 * (128 * 2 + 128 * 2);
+    assert_eq!(expected, 536_870_912);
+    assert_eq!(
+        estimate.kv_cache_bytes, expected,
+        "the KV term must be priced with the 4 KV heads"
+    );
+    // …and not with the 32 query heads, which is 8× larger.
+    assert_ne!(estimate.kv_cache_bytes, 8192u64 * 32 * 32 * 512);
+}
+
+#[test]
+fn test_t038_head_dimension_comes_from_the_header_not_the_division() {
+    // Owners' real files declare 256-wide heads while
+    // embedding_length / attention_head_count = 5120 / 24 = 213. The cache is
+    // priced per head, so the declared dimension decides the term.
+    let metadata = hybrid_metadata();
+    let mut inputs = make_inputs(metadata, 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    inputs.params.ctx_size = Some(512);
+    inputs.params.gpu_layers = Some(65);
+
+    let estimate = estimate(&inputs, &[]);
+
+    // 512 cells × 16 KV layers × 4 KV heads × (256×2 + 256×2) = 32.00 MiB —
+    // exactly what the build reports for this model at this context
+    // (`llama_kv_cache: size = 32.00 MiB (512 cells, 16 layers)`).
+    assert_eq!(estimate.kv_cache_bytes, 33_554_432);
+    // The division would have produced this instead.
+    let division_dim = 5120 / 24; // 213
+    assert_ne!(
+        estimate.kv_cache_bytes,
+        512u64 * 16 * 4 * (division_dim * 2 + division_dim * 2)
+    );
+}
+
+#[test]
+fn test_t038_hybrid_model_sizes_the_cache_for_its_attention_layers_only() {
+    // 65 blocks, one full-attention layer every 4th → 16 KV layers, and the
+    // other 48 keep a fixed-size recurrent state. Sizing the cache for all 65
+    // layers is the 4× overestimate T-038 was opened for.
+    let metadata = hybrid_metadata();
+    let mut all_layers = make_inputs(metadata.clone(), 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    all_layers.params.ctx_size = Some(512);
+    all_layers.params.gpu_layers = Some(65);
+
+    let mut every_layer = make_inputs(metadata, 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    every_layer.params.ctx_size = Some(512);
+    every_layer.params.gpu_layers = Some(65);
+    every_layer.metadata.full_attention_interval = None; // as if it were dense
+
+    let hybrid = estimate(&all_layers, &[]);
+    let dense = estimate(&every_layer, &[]);
+
+    assert_eq!(hybrid.kv_cache_bytes, 33_554_432);
+    assert_eq!(dense.kv_cache_bytes, 33_554_432 / 16 * 65);
+    assert!(
+        hybrid.kv_cache_bytes < dense.kv_cache_bytes,
+        "the hybrid cache must be the smaller of the two"
+    );
+}
+
+#[test]
+fn test_t038_recurrent_state_matches_the_builds_own_buffer_size() {
+    // The build prints, for this model with one sequence:
+    //   `llama_memory_recurrent: size = 149.62 MiB (1 cells, 64 layers, 1 seqs 0 rs_seq),
+    //    R (f32): 5.62 MiB, S (f32): 144.00 MiB`
+    // and 4× that when the draft stage runs (`598.50 MiB`, `3 rs_seq`).
+    let metadata = hybrid_metadata();
+    let mut inputs = make_inputs(metadata, 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    inputs.params.ctx_size = Some(512);
+    inputs.params.gpu_layers = Some(65);
+
+    let estimate = estimate(&inputs, &[]);
+
+    // 48 recurrent layers × (786 432 + 30 720) elements × 4 bytes = 149.62 MiB
+    // for one sequence; this model has MTP heads, so the draft stage keeps
+    // 1 + --spec-draft-n-max (default 3) = 4 of them.
+    let per_sequence = 48u64 * (786_432 + 30_720) * 4;
+    assert_eq!(per_sequence, 156_893_184);
+    assert_eq!(estimate.recurrent_state_bytes, per_sequence * 4);
+    assert!(estimate
+        .notes
+        .iter()
+        .any(|n| n.contains("Recurrent (non-attention) layers: 48 of 65")));
+}
+
+#[test]
+fn test_t038_mtp_draft_layers_are_priced_and_named() {
+    // Acceptance: "a model with MTP heads names the MTP cost in notes".
+    // Measured: the MTP layer runs in its own context with its own cache —
+    // `llama_kv_cache: size = 2.00 MiB (512 cells, 1 layers)` at this context.
+    let metadata = hybrid_metadata();
+    let mut inputs = make_inputs(metadata, 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    inputs.params.ctx_size = Some(512);
+    inputs.params.gpu_layers = Some(65);
+
+    let estimate = estimate(&inputs, &[]);
+
+    assert_eq!(estimate.mtp_draft_bytes, 2_097_152);
+    assert!(
+        estimate
+            .notes
+            .iter()
+            .any(|n| n.contains("MTP draft layers: 1")),
+        "the MTP cost must be named: {:?}",
+        estimate.notes
+    );
+}
+
+#[test]
+fn test_t038_a_model_without_mtp_pays_nothing_for_it() {
+    let mut metadata = hybrid_metadata();
+    metadata.has_mtp_heads = false;
+    metadata.mtp_layer_count = None;
+    let mut inputs = make_inputs(metadata, 16_000_000_000, 48 * 1024 * 1024 * 1024);
+    inputs.params.ctx_size = Some(512);
+    inputs.params.gpu_layers = Some(65);
+
+    let estimate = estimate(&inputs, &[]);
+
+    assert_eq!(estimate.mtp_draft_bytes, 0);
+    // …and with nothing drafting, the recurrent state is one sequence again.
+    // The layer arithmetic follows llama.cpp's own: it runs the model on
+    // `block_count − nextn_predict_layers` repeating layers, so without an MTP
+    // layer all 65 blocks repeat and 65 − 16 attention layers keep a state.
+    assert_eq!(estimate.recurrent_state_bytes, 49 * (786_432 + 30_720) * 4);
+}
+
+#[test]
+fn test_t038_a_draft_companion_includes_its_weights_and_its_own_cache() {
+    // Acceptance: "a configuration with a draft companion includes the
+    // companion's weights in the estimate". The companion is a second model, so
+    // its own cache is part of it too.
+    let metadata = make_metadata("llama", "Q4_K_M", 32);
+    let mut inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
+    inputs.params.gpu_layers = Some(32);
+    inputs.params.ctx_size = Some(512);
+    inputs.draft = Some(DraftModelInputs {
+        path: PathBuf::from("E:/models/draft-dflash2.gguf"),
+        size_bytes: Some(1_094_346_016), // the real file, measured with stat
+        metadata: Some(companion_metadata()),
+    });
+
+    let with_companion = estimate(&inputs, &[]);
+
+    // 512 cells × 5 layers × 8 KV heads × (128×2 + 128×2) = 10.00 MiB — the
+    // build's own figure for this companion (`llama_kv_cache: size = 10.00 MiB
+    // (512 cells, 5 layers)`), plus the file itself.
+    let companion_kv = 512u64 * 5 * 8 * (128 * 2 + 128 * 2);
+    assert_eq!(companion_kv, 10_485_760);
+    assert_eq!(with_companion.draft_bytes, 1_094_346_016 + companion_kv);
+    assert!(with_companion
+        .notes
+        .iter()
+        .any(|n| n.contains("Draft companion counted")));
+
+    // The same configuration without the companion is strictly cheaper.
+    let mut without = inputs.clone();
+    without.draft = None;
+    let without_companion = estimate(&without, &[]);
+    assert!(
+        with_companion.estimated_vram_bytes > without_companion.estimated_vram_bytes,
+        "the companion's memory must appear in the projection"
+    );
+    assert_eq!(without_companion.draft_bytes, 0);
+}
+
+#[test]
+fn test_t038_an_unmeasurable_companion_is_not_silently_zero() {
+    // Acceptance: "An unquantified draft term must not be silently zero."
+    // The configured companion is gone, so the term cannot be quantified — and
+    // the estimate says so instead of presenting a tidy number without it.
+    let metadata = make_metadata("llama", "Q4_K_M", 32);
+    let mut inputs = make_inputs(metadata, 4_000_000_000, 24 * 1024 * 1024 * 1024);
+    inputs.params.gpu_layers = Some(32);
+    inputs.draft = Some(DraftModelInputs {
+        path: PathBuf::from("E:/models/deleted-draft.gguf"),
+        size_bytes: None,
+        metadata: None,
+    });
+
+    let estimate = estimate(&inputs, &[]);
+
+    assert_eq!(estimate.draft_bytes, 0);
+    assert!(
+        estimate
+            .notes
+            .iter()
+            .any(|n| n.contains("deleted-draft.gguf") && n.contains("NOT included")),
+        "the missing term must be named: {:?}",
+        estimate.notes
+    );
+    // A knowingly incomplete estimate is reported with the widened margin.
+    assert!(
+        estimate
+            .notes
+            .iter()
+            .any(|n| n.contains("Conservative margin: 25%")),
+        "an unaccounted term must widen the margin: {:?}",
+        estimate.notes
+    );
+}
+
+#[test]
+fn test_t038_recommended_layers_never_ignore_the_draft_term() {
+    // Acceptance: "recommended_gpu_layers never recommends a layer count that
+    // stops fitting once the draft term is included."
+    let metadata = make_metadata("llama", "Q4_K_M", 32);
+    let six_gib = 6 * 1024 * 1024 * 1024;
+
+    let mut without = make_inputs(metadata.clone(), 4_000_000_000, six_gib);
+    without.params.ctx_size = Some(2048);
+    let plain = estimate(&without, &[]);
+    assert_eq!(
+        plain.recommended_gpu_layers, 32,
+        "a 4 GB model fits in 6 GiB"
+    );
+
+    let mut with = make_inputs(metadata, 4_000_000_000, six_gib);
+    with.params.ctx_size = Some(2048);
+    with.draft = Some(DraftModelInputs {
+        path: PathBuf::from("E:/models/draft.gguf"),
+        size_bytes: Some(4 * 1024 * 1024 * 1024),
+        metadata: Some(companion_metadata()),
+    });
+    let drafted = estimate(&with, &[]);
+
+    assert!(
+        drafted.recommended_gpu_layers < 32,
+        "4 GiB of companion cannot be ignored: {}",
+        drafted.recommended_gpu_layers
+    );
+    assert!(
+        drafted.estimated_vram_bytes <= without.vram_free_bytes,
+        "the recommendation must not exceed the available VRAM once the draft term is in"
+    );
 }

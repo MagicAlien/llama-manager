@@ -560,6 +560,25 @@ export function ModelDetailScreen() {
                   {`${strings.screens.modelDetail.launch.projectionProjector}: ${formatBytes(projection.projector_bytes)}`}
                 </span>
               )}
+              {/* T-038 — the terms the estimate accounts for beyond weights and
+                  KV. Each is rendered only when it is non-zero: a row that is
+                  true of almost every model carries no information, and a fixed
+                  placeholder for a term that does not apply reads as a bug. */}
+              {projection.draft_bytes > 0 && (
+                <span>
+                  {`${strings.screens.modelDetail.launch.projectionDraft}: ${formatBytes(projection.draft_bytes)}`}
+                </span>
+              )}
+              {projection.recurrent_state_bytes > 0 && (
+                <span>
+                  {`${strings.screens.modelDetail.launch.projectionRecurrent}: ${formatBytes(projection.recurrent_state_bytes)}`}
+                </span>
+              )}
+              {projection.mtp_draft_bytes > 0 && (
+                <span>
+                  {`${strings.screens.modelDetail.launch.projectionMtp}: ${formatBytes(projection.mtp_draft_bytes)}`}
+                </span>
+              )}
             </div>
             <span
               className={`text-xs ${projection.fits_fully ? "text-pass" : "text-warn"}`}
