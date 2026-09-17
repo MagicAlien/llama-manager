@@ -553,16 +553,13 @@ export function ModelDetailScreen() {
         {projection ? (
           <div className="flex flex-col gap-2">
             {/* Ordered by what the figures are, not by how they were computed:
-                the total first, then the terms that make it up largest-lever
-                first, the second resource last. The verdict below carries the
-                comparison AND the budget it was made against, so the two
-                machine figures are no longer siblings of the costs (owner
-                decision, 17 Sept 2026 — the row read as six estimates of the
-                same kind, while "GPU VRAM" cannot react to the controls). */}
+                the total, then the terms that make it up largest-lever first,
+                then the second resource, and the layer recommendation last —
+                it is a count, not a size, and the owner placed it there (17
+                Sept 2026). The verdict below carries the comparison AND the
+                budget it was made against, so the two machine figures are no
+                longer siblings of the costs. */}
             <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-foreground">
-              <span>
-                {`${strings.screens.modelDetail.launch.projectionLayers}: ${projection.recommended_gpu_layers}`}
-              </span>
               <span>
                 {`${strings.screens.modelDetail.launch.projectionVram}: ${formatBytes(projection.estimated_vram_bytes)}`}
               </span>
@@ -591,6 +588,9 @@ export function ModelDetailScreen() {
               )}
               <span>
                 {`${strings.screens.modelDetail.launch.projectionRam}: ${formatBytes(projection.estimated_ram_bytes)}`}
+              </span>
+              <span>
+                {`${strings.screens.modelDetail.launch.projectionLayers}: ${projection.recommended_gpu_layers}`}
               </span>
             </div>
             <span

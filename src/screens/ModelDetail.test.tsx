@@ -443,12 +443,12 @@ describe("ModelDetailScreen — T-038 projection terms", () => {
     // Structural, like T-037's "above the model's own text" check: the order is
     // asserted by document position, not by reading a rendered string.
     const order = [
-      "Recommended GPU layers",
       "Estimated VRAM",
       "KV cache",
       "MTP draft cache",
       "Vision",
       "Estimated RAM",
+      "Recommended GPU layers",
     ];
     const nodes = order.map((label) => screen.getByText(new RegExp(`^${label}:`)));
     for (let i = 1; i < nodes.length; i += 1) {
