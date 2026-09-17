@@ -309,7 +309,25 @@ pub struct EstimateInputs {
     pub file_size_bytes: u64,
     pub params: LaunchParams,
     pub vram_free_bytes: u64,
+    pub vram_total_bytes: u64,
+    /// The projector (mmproj) file size, if the model has one.
+    pub projector_bytes: u64,
+    /// The draft companion this configuration names, if any (T-038). Absent
+    /// (`None`) means the configuration has no companion — a companion that is
+    /// named but unreadable arrives as `Some` with `None` inside, so the
+    /// estimate can say it is unaccounted rather than silently bill zero.
+    pub draft: Option<DraftModelInputs>,
     pub ram_free_bytes: u64,
+}
+
+/// A speculative-decoding draft companion as the estimator sees it (T-038).
+/// Both halves are `Option`: a companion deleted, moved or unreadable since it
+/// was saved is an *explicitly unaccounted* term with a note naming the file.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DraftModelInputs {
+    pub path: PathBuf,
+    pub size_bytes: Option<u64>,
+    pub metadata: Option<GgufMetadata>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -321,6 +339,22 @@ pub struct VramEstimate {
     pub fits_fully: bool,
     pub confidence: EstimateConfidence,
     pub notes: Vec<String>,
+    /// The GPU's total and free VRAM, as the environment probe reported them.
+    pub vram_total_bytes: u64,
+    pub vram_free_bytes: u64,
+    /// The projector (mmproj) file size, if the model has one.
+    pub projector_bytes: u64,
+    /// The draft companion's total cost — its weights plus its own KV cache
+    /// (T-038). `0` means "no companion configured", which is why an
+    /// unmeasurable companion is reported in `notes` rather than as a zero.
+    pub draft_bytes: u64,
+    /// The recurrent (SSM / linear-attention) layers' state of a hybrid model
+    /// (T-038). Does not grow with the context; `0` for a model whose every
+    /// layer holds a KV cache.
+    pub recurrent_state_bytes: u64,
+    /// The KV cache of the MTP layers, which llama.cpp runs in their own draft
+    /// context (T-038). `0` when the model does not draft with its own heads.
+    pub mtp_draft_bytes: u64,
 }
 
 /// The estimator is pure. History is an argument, never a database read.
@@ -344,41 +378,74 @@ Coefficients are a starting point, not truth. They are the owner's to correct fr
 **Terms.**
 
 ```
-head_dim        = embedding_length / attention_head_count
+layers_with_cache = gpu_layers / full_attention_interval   (when the model declares one > 1)
+key_dim          = attention.key_length   else embedding_length / attention_head_count
+value_dim        = attention.value_length else embedding_length / attention_head_count
 
-weights_gpu     = file_size_bytes × (gpu_layers / block_count)
-weights_cpu     = file_size_bytes − weights_gpu
+weights_gpu      = file_size_bytes × (gpu_layers / block_count)
+weights_cpu      = file_size_bytes − weights_gpu
 
-kv_bytes        = 2                         (one K, one V)
-                × ctx_size
-                × min(gpu_layers, block_count)
-                × attention_head_count_kv
-                × head_dim
-                × bytes_per_element(cache_type)
+kv_bytes         = ctx_size
+                 × layers_with_cache
+                 × attention_head_count_kv
+                 × (key_dim   × bytes_per_element(cache_type_k)
+                  + value_dim × bytes_per_element(cache_type_v))
 
-compute_buffer  = ubatch_size × embedding_length × 4 bytes × C_compute
+recurrent_bytes  = recurrent_layers × state_per_sequence × draft_copies
+draft_bytes      = the companion's file size + the companion's own kv_bytes
+mtp_bytes        = mtp_layers × one layer's kv_bytes
+
+compute_buffer   = ubatch_size × embedding_length × 4 bytes × C_compute
 context_overhead = C_context                (CUDA context, allocator, cuBLAS workspaces)
 
-estimated_vram  = (weights_gpu + kv_bytes + compute_buffer + context_overhead) × (1 + margin)
-estimated_ram   = weights_cpu + C_host
+estimated_vram   = (weights_gpu + kv_bytes + compute_buffer + projector_bytes
+                    + recurrent_bytes + draft_bytes + mtp_bytes + context_overhead) × (1 + margin)
+estimated_ram    = weights_cpu + C_host
 ```
 
-`bytes_per_element` is 2 for `f16`, 1 for `q8_0`, 0.5625 for `q4_0` — quantizing the cache is the single largest lever on `kv_bytes` at long context, which is why T-032 asserts the direction of that effect rather than only its determinism.
+**The coefficients above are those of the pinned build, measured against its own accounting, not derived from this document.** Corrected by T-100 from the numbers `llama-server.exe` b10883 prints for the owner's real files (`-lv 5`, F-019); the narrative behind the correction is D-017.
 
-**Constants.** `C_compute = 2.0`, `C_context = 512 MiB`, `C_host = 256 MiB`, `margin = 0.12`.
+**The KV cache is sized for the layers that hold one, and on a hybrid model that is not every layer.** A Qwen3-Next-style model declares `{arch}.full_attention_interval` and interleaves a recurrent layer between full-attention ones; only the full-attention layers keep a KV cache. The owner's file declares `full_attention_interval = 4` with `block_count = 65`, and the build reports a cache of **16 layers** while its recurrent memory accounts for the other 48 — billing all 65 is a 4.1× overestimate of the term, which is the error this correction exists to remove. `layers_with_cache` takes the offloaded share proportionally (`gpu_layers / interval`). Which layers llama.cpp offloads — a contiguous window — is not modelled, so a *partial* offload of a hybrid model is approximate; the full offload this app generates by default is exact.
+
+**K and V are priced separately, with their own dimensions and their own cache type.** `head_dim` is **not** `embedding_length / attention_head_count`: real files declare the per-head width outright as `{arch}.attention.key_length` and `{arch}.attention.value_length`, and the two need not be equal. The division is only the fallback for a file that declares neither, and it is a poor one — the owner's 27B declares `embedding_length = 5120` with 24 query heads and 256-wide heads, where the division yields 213, 20% under the truth. llama.cpp reads the declared lengths itself (`print_info: n_embd_head_k = 256`).
+
+**`bytes_per_element` is what one element costs in that quantization, not its nominal width.** `f16` is 2. `q8_0` is **1.0625**, not 1: a block is 32 quantized bytes plus a 2-byte scale, so an element costs 8.5 bits. `q4_0` is 0.5625 by the same arithmetic — 16 bytes of nibbles plus the scale, 4.5 bits per element. Both figures are confirmed by the build's own report: a 512-cell, 16-layer K cache comes out at 8.50 MiB and 4.50 MiB, where a flat byte count predicts 8.00 and 4.00. Quantizing the cache remains the single largest lever on `kv_bytes` at long context, which is why T-032 asserts the direction of that effect rather than only its determinism.
+
+**A hybrid model's non-attention layers keep a fixed-size state, and it is a term of its own.** It does not grow with the context — a recurrent layer's state is allocated once per sequence — which is why it cannot be folded into `kv_bytes`. The size comes from llama.cpp's own `llama_hparams`:
+
+```text
+n_embd_s = state_size × inner_size
+n_embd_r = (conv_kernel − 1) × (inner_size + 2 × group_count × state_size)
+state_per_sequence = (n_embd_s + n_embd_r) × 4        (f32)
+```
+
+with `state_size`, `inner_size`, `group_count` and `conv_kernel` read from the file's four `{arch}.ssm.*` keys. `recurrent_layers` is every repeating layer that is not a full-attention one, with the MTP layers excluded first (`block_count` is `n_layer_all`; the model runs on `n_layer_all − nextn_predict_layers`). Measured for the owner's 27B: 149.62 MiB for 48 recurrent layers and one sequence, 598.50 MiB for four. When the four keys are absent the term is `0` and the model has no recurrent layers to bill — a dense hybrid is not a case that degrades.
+
+**A speculative-decoding configuration adds memory that the main model's own figures do not contain, and it is the term most easily left out.** Three shapes, and the launch configuration decides which one applies — an explicit companion wins over the model's own MTP heads, matching `core::speculative::spec_type_for_entry`:
+
+- **A draft companion** is a second model loaded beside the first: its file size counts in full, plus **its own** `kv_bytes`, sized from the companion's own header with the same functions (measured: the owner's dflash2 companion, 5 layers, 8 KV heads, 128-wide heads, reports 10.00 MiB at 512 cells — exactly `512 × 5 × 8 × (128 + 128) × 2`).
+- **MTP heads** are layers of the main file that draft in their own context: `mtp_layers × one layer's kv_bytes` (measured: one layer, 2.00 MiB at 512 cells). An MTP model drafts with `--spec-type draft-mtp` whether or not the user touched the speculative settings, so this term is present by default on such a model.
+- **Either way the recurrent state is multiplied by `draft_copies = 1 + --spec-draft-n-max`** — the pinned build's default is 3, so the state is allocated for four sequences while drafting, and the flag moves it (measured at `n_max = 1` → two, `n_max = 5` → six).
+
+**A term that cannot be measured is named, never counted as zero.** When the companion's file or header cannot be read, `draft_bytes` is a reported `0` **plus** a `notes` line naming the companion and saying its memory is not included, and the margin widens to 25%. A silent zero is an underestimate in the dangerous direction — the same rule the missing-metadata paragraph below applies to the KV term.
+
+**Constants.** `C_compute = 2.0`, `C_context = 512 MiB`, `C_host = 256 MiB`, `margin = 0.12`, widened `margin = 0.25`. The two fallbacks are single values, not per-architecture tables: `DEFAULT_HEAD_DIM = 128` and `DEFAULT_ATTENTION_HEAD_COUNT_KV = 8`.
 
 **The margin is not symmetric and is stated deliberately.** Overestimating costs performance — the user offloads fewer layers than they could. Underestimating costs an out-of-memory failure partway through loading a 65 GB file, minutes in, with nothing to show for the wait. 12% biases toward the recoverable failure, and `VramEstimate.notes` says the figure is conservative so the user is not left wondering why the reported number exceeds what they observe.
 
-**Missing metadata degrades, it does not guess.** When `attention_head_count_kv` is absent the estimator does **not** assume it equals `attention_head_count` — with Grouped Query Attention that is wrong by up to 8×, in the dangerous direction. It falls back to a per-architecture default where one is known, notes which value was assumed, and widens the margin to 25% for that estimate.
+**Missing metadata degrades, it does not guess.** When `attention_head_count_kv` is absent the estimator does **not** assume it equals `attention_head_count` — with Grouped Query Attention that is wrong by up to 8×, in the dangerous direction. It applies `DEFAULT_ATTENTION_HEAD_COUNT_KV` (8), names the assumed value in `notes`, and widens the margin to 25% for that estimate.
 
-**The other two fields the model divides by degrade the same way.** `head_dim` needs `embedding_length` and `attention_head_count`, and both are `Option`:
+**The head dimensions degrade the same way, and they always produce a figure — never a zero.** `key_dim` and `value_dim` come from the declared `{arch}.attention.key_length` / `value_length`, and failing that from `embedding_length / attention_head_count`:
 
-- Either absent, with a per-architecture default known ⇒ apply it, name it in `notes`, widen the margin to 25%.
-- Either absent with no default known ⇒ `kv_bytes` cannot be computed. Do **not** substitute zero: a KV term of zero underestimates in the dangerous direction at long context. Return an estimate whose `kv_cache_bytes` is the whole-file upper bound implied by `ctx_size` and `block_count` alone, mark `confidence: Heuristic`, widen the margin to 25%, and say in `notes` that the cache term is bounded rather than modelled.
+- **Declared** ⇒ used as read.
+- **Not declared but derivable** ⇒ the division is used: the file's own numbers are still the source, and every real file that declares them is unaffected.
+- **Neither** ⇒ `DEFAULT_HEAD_DIM` (128) is applied, named in `notes`, and the margin widens to 25%.
+
+Substituting zero is never the answer: a KV term of zero underestimates in the dangerous direction at long context, and a tidy figure built on a missing term is worse than a wide one. `confidence` is decided by the calibration contract alone — matching history makes an estimate `Calibrated` whatever was assumed about the file — which is why every widening is announced in `notes` rather than left to be inferred from the number.
 
 **What produces `recommended_gpu_layers`.** The estimator is asked two questions at once and they must not be confused. `inputs.params.gpu_layers` is the configuration being *evaluated* — `estimated_vram` is what that configuration would cost, which is why T-032 asserts monotonicity in it. `recommended_gpu_layers` is a separate answer, computed by the same formula run over candidate layer counts:
 
-- Take the largest `n` in `0..=block_count` for which `estimated_vram(n) ≤ vram_free_bytes`, evaluated with the margin already applied. The search is a scan, not a solve: `block_count` is at most a few hundred and the function is cheap and monotone, so a bisection would buy nothing and cost a correctness argument.
+- Take the largest `n` in `0..=block_count` for which `estimated_vram(n) ≤ vram_free_bytes`, evaluated with the margin already applied. The search is a bisection, and it is exact: every term other than the weights and the KV cache — the recurrent state, the draft companion, the MTP layers' cache, the projector — is constant in `n`, so `estimated_vram(n)` is monotone and the largest fitting `n` is well defined. Those constant terms sit **inside** the comparison deliberately: a layer count that only fits while the companion is ignored is not a recommendation this project may make.
 - When `inputs.params.gpu_layers` is `None` — the user has not chosen — `estimated_vram` is reported for the recommended `n` rather than for an arbitrary one, and `notes` says which value it describes.
 - `recommended_gpu_layers` never exceeds `block_count`, and is `0` when no `n` fits.
 
