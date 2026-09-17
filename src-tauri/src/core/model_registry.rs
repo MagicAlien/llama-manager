@@ -560,12 +560,23 @@ pub fn backfill_capability_metadata() -> Result<u32, AppError> {
     backfill_capability_metadata_on(&conn)
 }
 
-/// The header-derived geometry fields T-038 added to `GgufMetadata`, paired with
-/// the JSON key each is stored under. A table, not eight inline inserts: the
-/// next header-derived field is one line here plus its fixture.
+/// The header-derived fields T-038 added to `GgufMetadata` **and** the shape keys
+/// a pre-T-038 import could not read at all (they were looked up under a fixed
+/// `llama.` prefix and stored as `null`), paired with the JSON key each is
+/// stored under. A table, not thirteen inline inserts: the next header-derived
+/// field is one line here plus its fixture.
+///
+/// The second half matters as much as the first. The estimator reads
+/// `attention_head_count_kv` and the per-head dimensions out of the **stored
+/// row**, so a row left at `null` keeps pricing the cache from the default 8 KV
+/// heads even with the new geometry keys sitting beside it: a repair that filled
+/// only the new keys would look done and leave the installed catalogue exactly as
+/// wrong as before. `null` here means "the old reader could not answer" — never a
+/// user's choice — which is why filling it is correct, and why a value that is
+/// already present is never overwritten.
 fn vram_geometry_fields(
     parsed: &crate::core::types::GgufMetadata,
-) -> [(&'static str, serde_json::Value); 8] {
+) -> [(&'static str, serde_json::Value); 13] {
     fn opt(value: Option<u32>) -> serde_json::Value {
         match value {
             Some(n) => serde_json::Value::from(n),
@@ -585,6 +596,14 @@ fn vram_geometry_fields(
         ("ssm_group_count", opt(parsed.ssm_group_count)),
         ("ssm_conv_kernel", opt(parsed.ssm_conv_kernel)),
         ("mtp_layer_count", opt(parsed.mtp_layer_count)),
+        ("context_length", opt(parsed.context_length)),
+        ("embedding_length", opt(parsed.embedding_length)),
+        ("attention_head_count", opt(parsed.attention_head_count)),
+        (
+            "attention_head_count_kv",
+            opt(parsed.attention_head_count_kv),
+        ),
+        ("expert_count", opt(parsed.expert_count)),
     ]
 }
 
@@ -622,7 +641,22 @@ pub fn backfill_vram_metadata_on(conn: &rusqlite::Connection) -> Result<u32, App
             );
             continue;
         };
-        if object.contains_key("full_attention_interval") && object.contains_key("mtp_layer_count")
+        // A row is left alone without re-reading its header only when it carries
+        // every field this repair can supply. `contains_key` alone is not enough:
+        // a row repaired by an earlier run already has `full_attention_interval`
+        // while its shape keys are still `null`, and that row is precisely the one
+        // the estimator misprices.
+        let shape_complete = [
+            "context_length",
+            "embedding_length",
+            "attention_head_count",
+            "attention_head_count_kv",
+        ]
+        .iter()
+        .all(|key| matches!(object.get(*key), Some(value) if !value.is_null()));
+        if object.contains_key("full_attention_interval")
+            && object.contains_key("mtp_layer_count")
+            && shape_complete
         {
             continue;
         }
@@ -649,7 +683,15 @@ pub fn backfill_vram_metadata_on(conn: &rusqlite::Connection) -> Result<u32, App
 
         let mut inserted: Vec<&str> = Vec::new();
         for (key, field) in vram_geometry_fields(&parsed) {
-            if !object.contains_key(key) {
+            // Fill what is missing and what the old reader could not answer
+            // (`null`), never a value that is present: a header-derived field
+            // someone set is not collateral for this repair.
+            let needs_fill = match object.get(key) {
+                None => true,
+                Some(serde_json::Value::Null) => !field.is_null(),
+                Some(_) => false,
+            };
+            if needs_fill {
                 object.insert(key.to_string(), field);
                 inserted.push(key);
             }
@@ -1216,6 +1258,9 @@ mod tests {
                     GgufValue::String("qwen35".to_string()),
                 ),
                 ("qwen35.block_count", GgufValue::UInt32(65)),
+                ("qwen35.embedding_length", GgufValue::UInt32(5120)),
+                ("qwen35.attention.head_count", GgufValue::UInt32(24)),
+                ("qwen35.attention.head_count_kv", GgufValue::UInt32(4)),
                 ("qwen35.attention.key_length", GgufValue::UInt32(256)),
                 ("qwen35.attention.value_length", GgufValue::UInt32(256)),
                 ("qwen35.full_attention_interval", GgufValue::UInt32(4)),
@@ -1303,6 +1348,13 @@ mod tests {
         // Nothing the row already held was rewritten.
         assert_eq!(value["context_length"], serde_json::json!(200000));
         assert_eq!(value["quantization"], serde_json::json!("NVFP4"));
+        // The keys the old reader could not answer are filled from the header:
+        // a repair that only added the new keys would leave
+        // `attention_head_count_kv` at `null`, and the estimator would keep
+        // pricing the cache with the default 8 KV heads instead of the file's 4.
+        assert_eq!(value["embedding_length"], serde_json::json!(5120));
+        assert_eq!(value["attention_head_count"], serde_json::json!(24));
+        assert_eq!(value["attention_head_count_kv"], serde_json::json!(4));
 
         // The reading the screens do now carries the geometry, so the
         // projection is computed from the file rather than from defaults.
@@ -1317,6 +1369,15 @@ mod tests {
         assert!(
             value.get("full_attention_interval").is_none(),
             "a file that cannot be re-read must not gain a plausible-looking answer"
+        );
+
+        // A file that declares no shape keys gains none invented: the repair
+        // reports the header, it does not fill a plausible value.
+        let dense_row = queries::get_model(&conn, "model-dense").unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&dense_row.metadata_json).unwrap();
+        assert!(
+            value["embedding_length"].is_null(),
+            "a header without embedding_length must not become a number"
         );
 
         // Idempotent: the second pass has nothing left to do.
