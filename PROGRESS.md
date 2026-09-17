@@ -21,7 +21,7 @@ Next candidate: T-040, once T-100 is merged. T-006 remains `Blocked` on D-005.
 
 ## In progress
 
-- **T-100** — `docs/CONTRACTS.md` §1 states the pinned build's measured coefficients, and the terms it never had · branch `t-100-contracts-s1-estimation-model`, not committed yet · `[closes: D-017]`
+- **T-100** — `docs/CONTRACTS.md` §1 states the pinned build's measured coefficients, and the terms it never had · branch `t-100-contracts-s1-estimation-model`, commit `e2e2144`, **PR #34** opened 17 Sept 2026 · `[closes: D-017]`
   - **The decision, and whose it is.** The owner, 17 Sept 2026, verbatim: *"Non vedo scelte da parte mia, hai il diritto di correggere questa cosa."* That is D-017's proposal (a) — correct the coefficients to what the build measures, add the missing terms (`docs/WORKFLOW.md` §7: *the owner decides, you redraft*). No choice of mine was left in it: the numbers are measurements, not preferences.
   - **Acceptance, bullet by bullet, with where each stands.**
     - *§1's coefficients are the measured ones.* Met: the formula block now derives `layers_with_cache` from `{arch}.full_attention_interval`, takes `key_dim`/`value_dim` from the declared `attention.key_length`/`value_length`, prices K and V with their own cache types, and states `q8_0 = 1.0625` (8.5 bits) rather than 1. Each figure carries the measurement that settled it in prose, cited to F-019.
@@ -29,7 +29,7 @@ Next candidate: T-040, once T-100 is merged. T-006 remains `Blocked` on D-005.
     - *No sentence in the section contradicts `core/estimator.rs`.* Met by inspection of every paragraph against the code: the search is now described as a bisection (with the layer-independent terms inside the comparison), the degrade rules state the two single defaults (`128`, `8`) and the "there is always a figure" behaviour, and the `EstimateInputs` / `DraftModelInputs` / `VramEstimate` listings carry the fields the code has.
     - *`docs/TASKS.md`'s checks (T-006) pass.* Met by hand against the nine checks: T-100 appears only in the Corrections section, `[closes: D-017]` names an entry that exists, and every document the entry cites exists.
   - **Two drifts corrected here that D-017 did not enumerate**, because they are lines of the same section and leaving them would have left §1 contradicting the code: the formula never carried `projector_bytes` (the code has applied it since the vision work, and D-017's own evidence lists the projector among the terms that exist), and the rationale for `recommended_gpu_layers` read "the search is a scan, not a solve" while the code bisects. Both are named in T-100's body rather than applied silently.
-  - **Not done, and the reason.** No code file, no snapshot and no fixture is touched — a correction task changes documents, and the implementation this documents is already merged (T-038, PR #33). The commit and the PR wait for the owner, as always.
+  - **Not done, and the reason.** No code file, no snapshot and no fixture is touched — a correction task changes documents, and the implementation this documents is already merged (T-038, PR #33). The PR is open and green-gated locally; the merge waits for the owner, and D-017 moves to `resolved by T-100` only after it lands.
 
 ## Done
 
