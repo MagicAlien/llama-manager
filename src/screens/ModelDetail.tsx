@@ -90,6 +90,19 @@ function formatBytes(bytes: bigint | number): string {
   return `${(b / 1024).toFixed(0)} KB`;
 }
 
+/**
+ * How far the estimate is from the GPU's free VRAM, always positive: the
+ * verdict word beside it ("headroom" / "over") carries the direction. The
+ * numbers are read as `Number` because the typed shape says `bigint` while the
+ * IPC delivers a JSON number — the same asymmetry `formatBytes` already
+ * handles — so a `0n` comparison in here would throw at runtime.
+ */
+function vramDeltaBytes(projection: VramEstimate): number {
+  return Math.abs(
+    Number(projection.vram_free_bytes) - Number(projection.estimated_vram_bytes),
+  );
+}
+
 function formatParamCount(count: bigint | number | null): string {
   if (count === null) return "?";
   const c = typeof count === "bigint" ? Number(count) : count;
@@ -539,6 +552,13 @@ export function ModelDetailScreen() {
         </span>
         {projection ? (
           <div className="flex flex-col gap-2">
+            {/* Ordered by what the figures are, not by how they were computed:
+                the total first, then the terms that make it up largest-lever
+                first, the second resource last. The verdict below carries the
+                comparison AND the budget it was made against, so the two
+                machine figures are no longer siblings of the costs (owner
+                decision, 17 Sept 2026 — the row read as six estimates of the
+                same kind, while "GPU VRAM" cannot react to the controls). */}
             <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-foreground">
               <span>
                 {`${strings.screens.modelDetail.launch.projectionLayers}: ${projection.recommended_gpu_layers}`}
@@ -547,26 +567,21 @@ export function ModelDetailScreen() {
                 {`${strings.screens.modelDetail.launch.projectionVram}: ${formatBytes(projection.estimated_vram_bytes)}`}
               </span>
               <span>
-                {`${strings.screens.modelDetail.launch.projectionRam}: ${formatBytes(projection.estimated_ram_bytes)}`}
-              </span>
-              <span>
                 {`${strings.screens.modelDetail.launch.projectionKv}: ${formatBytes(projection.kv_cache_bytes)}`}
               </span>
-              <span>
-                {`${strings.screens.modelDetail.launch.projectionGpuVram}: ${formatBytes(projection.vram_free_bytes)} / ${formatBytes(projection.vram_total_bytes)}`}
-              </span>
-              {projection.projector_bytes > 0 && (
+              {projection.mtp_draft_bytes > 0 && (
                 <span>
-                  {`${strings.screens.modelDetail.launch.projectionProjector}: ${formatBytes(projection.projector_bytes)}`}
+                  {`${strings.screens.modelDetail.launch.projectionMtp}: ${formatBytes(projection.mtp_draft_bytes)}`}
                 </span>
               )}
-              {/* T-038 — the terms the estimate accounts for beyond weights and
-                  KV. Each is rendered only when it is non-zero: a row that is
-                  true of almost every model carries no information, and a fixed
-                  placeholder for a term that does not apply reads as a bug. */}
               {projection.draft_bytes > 0 && (
                 <span>
                   {`${strings.screens.modelDetail.launch.projectionDraft}: ${formatBytes(projection.draft_bytes)}`}
+                </span>
+              )}
+              {projection.projector_bytes > 0 && (
+                <span>
+                  {`${strings.screens.modelDetail.launch.projectionVision}: ${formatBytes(projection.projector_bytes)}`}
                 </span>
               )}
               {projection.recurrent_state_bytes > 0 && (
@@ -574,18 +589,24 @@ export function ModelDetailScreen() {
                   {`${strings.screens.modelDetail.launch.projectionRecurrent}: ${formatBytes(projection.recurrent_state_bytes)}`}
                 </span>
               )}
-              {projection.mtp_draft_bytes > 0 && (
-                <span>
-                  {`${strings.screens.modelDetail.launch.projectionMtp}: ${formatBytes(projection.mtp_draft_bytes)}`}
-                </span>
-              )}
+              <span>
+                {`${strings.screens.modelDetail.launch.projectionRam}: ${formatBytes(projection.estimated_ram_bytes)}`}
+              </span>
             </div>
             <span
               className={`text-xs ${projection.fits_fully ? "text-pass" : "text-warn"}`}
             >
-              {projection.fits_fully
-                ? strings.screens.modelDetail.launch.projectionFits
-                : strings.screens.modelDetail.launch.projectionDoesntFit}
+              {`${
+                projection.fits_fully
+                  ? strings.screens.modelDetail.launch.projectionFits
+                  : strings.screens.modelDetail.launch.projectionDoesntFit
+              } — ${formatBytes(vramDeltaBytes(projection))} ${
+                projection.fits_fully
+                  ? strings.screens.modelDetail.launch.projectionHeadroom
+                  : strings.screens.modelDetail.launch.projectionOver
+              } (${formatBytes(projection.vram_free_bytes)} ${
+                strings.screens.modelDetail.launch.projectionFreeOf
+              } ${formatBytes(projection.vram_total_bytes)})`}
             </span>
             {projection.notes.length > 0 && (
               <ul className="list-inside list-disc text-xs text-muted-foreground">

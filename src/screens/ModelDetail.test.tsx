@@ -331,25 +331,36 @@ describe("ModelDetailScreen — T-037 capability tags", () => {
 });
 
 describe("ModelDetailScreen — T-038 projection terms", () => {
+  /** The estimate the backend would return, with only the fields in play. */
+  const estimate = (over: Record<string, unknown>) => ({
+    recommended_gpu_layers: 65,
+    estimated_vram_bytes: 20_000_000_000,
+    estimated_ram_bytes: 268_435_456,
+    kv_cache_bytes: 12_000_000_000,
+    vram_free_bytes: 30 * 1024 ** 3,
+    vram_total_bytes: 30 * 1024 ** 3,
+    projector_bytes: 0,
+    draft_bytes: 0,
+    recurrent_state_bytes: 0,
+    mtp_draft_bytes: 0,
+    fits_fully: true,
+    confidence: "Heuristic",
+    notes: [],
+    ...over,
+  });
+
   it("shows the draft, recurrent and MTP terms only when they cost something", async () => {
     const ipc = await import("@/lib/ipc");
     (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
-    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue({
-      recommended_gpu_layers: 65,
-      estimated_vram_bytes: 20_000_000_000,
-      estimated_ram_bytes: 1_000_000_000,
-      kv_cache_bytes: 512_000_000,
-      vram_free_bytes: 32_000_000_000,
-      vram_total_bytes: 32_000_000_000,
-      projector_bytes: 0,
-      // The owner's real hybrid model: a companion, 588 MiB of recurrent
-      // state, and the MTP draft layer's own cache.
-      draft_bytes: 1_104_831_776,
-      recurrent_state_bytes: 616_562_688,
-      mtp_draft_bytes: 2_097_152,
-      fits_fully: true,
-      notes: [],
-    });
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue(
+      estimate({
+        // The owner's real hybrid model: a companion, 588 MiB of recurrent
+        // state, and the MTP draft layer's own cache.
+        draft_bytes: 1_104_831_776,
+        recurrent_state_bytes: 616_562_688,
+        mtp_draft_bytes: 2_097_152,
+      }),
+    );
 
     render(<ModelDetailScreen />);
 
@@ -361,14 +372,90 @@ describe("ModelDetailScreen — T-038 projection terms", () => {
   it("renders none of those rows for a dense model", async () => {
     const ipc = await import("@/lib/ipc");
     (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue(estimate({}));
 
     render(<ModelDetailScreen />);
 
     expect(await screen.findByText("Test Model")).toBeTruthy();
-    // The mock above leaves all three at zero; a placeholder row for a term
-    // that does not apply would read as a bug (UI rule: no fake information).
+    // A placeholder row for a term that does not apply would read as a bug (UI
+    // rule: no fake information).
     expect(screen.queryByText(/^Draft companion/)).toBeNull();
     expect(screen.queryByText(/^Recurrent layer state/)).toBeNull();
     expect(screen.queryByText(/^MTP draft cache/)).toBeNull();
+    expect(screen.queryByText(/^Vision/)).toBeNull();
+  });
+
+  it("states the verdict as a delta against the GPU's own VRAM", async () => {
+    // Owner decision, 17 Sept 2026: the two machine figures were siblings of
+    // the costs in the same row, so "GPU VRAM" read as a term of the estimate
+    // and its refusal to react to the controls read as a bug. It is the budget
+    // the delta is measured against, and the delta is what a user decides on.
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue(
+      estimate({
+        estimated_vram_bytes: 20 * 1024 ** 3,
+        vram_free_bytes: 30 * 1024 ** 3,
+        vram_total_bytes: 32 * 1024 ** 3,
+        fits_fully: true,
+      }),
+    );
+    const { unmount } = render(<ModelDetailScreen />);
+    expect(
+      await screen.findByText(
+        "Fits fully in VRAM — 10.0 GB headroom (30.0 GB free of 32.0 GB)",
+      ),
+    ).toBeTruthy();
+    // The budget is no longer presented as a row alongside the costs.
+    expect(screen.queryByText(/^GPU VRAM/)).toBeNull();
+    unmount();
+
+    // …and the same in the other direction: what to give up is the message.
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue(
+      estimate({
+        estimated_vram_bytes: 35 * 1024 ** 3,
+        vram_free_bytes: 30 * 1024 ** 3,
+        vram_total_bytes: 32 * 1024 ** 3,
+        fits_fully: false,
+      }),
+    );
+    render(<ModelDetailScreen />);
+    expect(
+      await screen.findByText(
+        "Does not fully fit in VRAM — 5.0 GB over (30.0 GB free of 32.0 GB)",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("lists the figures in the decided order", async () => {
+    const ipc = await import("@/lib/ipc");
+    (ipc.getModel as ReturnType<typeof vi.fn>).mockResolvedValue(plainModel);
+    (ipc.estimateVram as ReturnType<typeof vi.fn>).mockResolvedValue(
+      estimate({ projector_bytes: 888_000_000, mtp_draft_bytes: 819_200_000 }),
+    );
+
+    render(<ModelDetailScreen />);
+    // Await a node that only exists once the debounced estimate has resolved:
+    // the model name arrives first, the projection ~150 ms later.
+    await screen.findByText(/^Estimated VRAM:/);
+
+    // Structural, like T-037's "above the model's own text" check: the order is
+    // asserted by document position, not by reading a rendered string.
+    const order = [
+      "Recommended GPU layers",
+      "Estimated VRAM",
+      "KV cache",
+      "MTP draft cache",
+      "Vision",
+      "Estimated RAM",
+    ];
+    const nodes = order.map((label) => screen.getByText(new RegExp(`^${label}:`)));
+    for (let i = 1; i < nodes.length; i += 1) {
+      expect(
+        nodes[i - 1].compareDocumentPosition(nodes[i]) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
   });
 });
