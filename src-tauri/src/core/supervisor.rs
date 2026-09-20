@@ -64,8 +64,8 @@ use crate::core::process::{
     SystemPortAllocator,
 };
 use crate::core::types::{
-    AppError, Diagnosis, LoadedModelState, ModelEntry, ModelLoadState, RegistrationChannel,
-    RuntimeBuild, ServerConfig, ServerState, StartupPhase,
+    AppError, Diagnosis, EndpointState, LoadedModelState, ModelEntry, ModelLoadState,
+    RegistrationChannel, RuntimeBuild, ServerConfig, ServerState, StartupPhase,
 };
 
 /// The directory, under the app's data root, that the `ScanOnly` registration
@@ -373,6 +373,12 @@ pub trait SupervisorEvents: Send + Sync {
     /// The runtime half of `AGENTS.md` §1: a flag the active build does not
     /// carry is omitted from the preset *and named*, so the omission is visible.
     fn preset_warning(&self, warning: &PresetWarning);
+    /// The listener's own lifecycle (`docs/CONTRACTS.md` §2, "The endpoint is a
+    /// separate lifecycle"). Reported to the actor and broadcast from here
+    /// rather than emitted by the endpoint itself, because the actor is what
+    /// owns the value: a second emitter would be a second source of truth for
+    /// the same fact.
+    fn endpoint_state_changed(&self, state: &EndpointState);
 }
 
 // ─── Commands and replies ───────────────────────────────────────
@@ -385,6 +391,10 @@ enum SupervisorCommand {
     DismissCrash(Reply<ServerState>),
     GetState(Reply<ServerState>),
     MarkConfigDirty(Reply<()>),
+    /// The listener reporting its own lifecycle. It replies with the state the
+    /// actor now holds, so a caller that raced another report sees what won.
+    ReportEndpointState(EndpointState, Reply<EndpointState>),
+    GetEndpointState(Reply<EndpointState>),
 }
 
 /// The handle IPC holds. Every method blocks until the actor has applied the
@@ -421,6 +431,24 @@ impl SupervisorHandle {
 
     pub fn state(&self) -> Result<ServerState, AppError> {
         self.call(SupervisorCommand::GetState)
+    }
+
+    /// The listener's lifecycle, as the actor holds it (§2). `Unbound` before
+    /// the app's startup ever tried to bind, which is a different fact from a
+    /// bind that failed.
+    pub fn endpoint_state(&self) -> Result<EndpointState, AppError> {
+        let (tx, rx) = mpsc::channel();
+        self.send(SupervisorCommand::GetEndpointState(tx))?;
+        rx.recv().map_err(|_| actor_gone())?
+    }
+
+    /// The listener telling the actor what it is now. Answers with the value
+    /// the actor holds after the report, so a caller can tell whether its
+    /// report is the one in force.
+    pub fn report_endpoint_state(&self, state: EndpointState) -> Result<EndpointState, AppError> {
+        let (tx, rx) = mpsc::channel();
+        self.send(SupervisorCommand::ReportEndpointState(state, tx))?;
+        rx.recv().map_err(|_| actor_gone())?
     }
 
     /// Marks `Running.config_dirty` — the restart banner's input. Its callers
@@ -506,6 +534,49 @@ pub fn state_label(state: &ServerState) -> &'static str {
 
 // ─── Wiring the actor ───────────────────────────────────────────
 
+/// One actor, several listeners.
+///
+/// The supervisor already had a single sink (Tauri's events) and now has two:
+/// the renderer's events and the endpoint's upstream slot, which subscribes to
+/// `state_changed` to keep the port the listener forwards to. A fan-out keeps
+/// the actor unaware of who is listening — it reports, and the list is the
+/// composition root's business.
+pub struct Fanout {
+    sinks: Vec<Arc<dyn SupervisorEvents>>,
+}
+
+impl Fanout {
+    pub fn new(sinks: Vec<Arc<dyn SupervisorEvents>>) -> Arc<Fanout> {
+        Arc::new(Fanout { sinks })
+    }
+}
+
+impl SupervisorEvents for Fanout {
+    fn state_changed(&self, state: &ServerState) {
+        for sink in &self.sinks {
+            sink.state_changed(state);
+        }
+    }
+
+    fn log_line(&self, line: &LogLine) {
+        for sink in &self.sinks {
+            sink.log_line(line);
+        }
+    }
+
+    fn preset_warning(&self, warning: &PresetWarning) {
+        for sink in &self.sinks {
+            sink.preset_warning(warning);
+        }
+    }
+
+    fn endpoint_state_changed(&self, state: &EndpointState) {
+        for sink in &self.sinks {
+            sink.endpoint_state_changed(state);
+        }
+    }
+}
+
 pub struct SupervisorDeps {
     pub context: Arc<dyn ServerContext>,
     pub launcher: Arc<dyn ProcessLauncher>,
@@ -529,6 +600,33 @@ pub fn spawn(deps: SupervisorDeps) -> SupervisorHandle {
         tracing::error!("could not start the supervisor thread: {err}");
     }
     SupervisorHandle { tx: Mutex::new(tx) }
+}
+
+/// The stored `ServerConfig`, or the documented defaults — the same value
+/// `start_server` will use, read through the same `ServerContext`.
+///
+/// T-042's listener needs the client-facing address and the concurrency limit
+/// at app startup, before any screen has been opened; T-050 owns the screen
+/// that writes it. Reading it here rather than duplicating the defaults in
+/// `ipc/` keeps one answer to "what address is the app configured for"
+/// (`AGENTS.md` invariant 1).
+pub fn load_server_config() -> Result<ServerConfig, AppError> {
+    DatabaseContext.server_config()
+}
+
+/// The endpoint's report path back into the actor that owns its state (§2).
+///
+/// The listener holds this and nothing else about the supervisor: it reports,
+/// it does not query, so the data path never depends on the actor being free.
+pub struct ActorEndpointSink;
+
+impl crate::core::endpoint::EndpointStateSink for ActorEndpointSink {
+    fn report(&self, state: &EndpointState) {
+        match handle().and_then(|handle| handle.report_endpoint_state(state.clone())) {
+            Ok(_) => {}
+            Err(err) => tracing::warn!("could not record the endpoint state: {err}"),
+        }
+    }
 }
 
 /// The default production wiring: the real launcher, the real HTTP coordinator,
@@ -646,9 +744,18 @@ impl ServerContext for DatabaseContext {
 
 /// `ServerConfig`'s documented defaults, used until T-050's screen has stored
 /// anything. Every value is the one `docs/CONTRACTS.md` §1 annotates.
+///
+/// **`listen_address` is loopback**, as §1 and `PLAN.md` §2.7 and §6 all
+/// state: the app's listener defaults to `127.0.0.1`, and binding `0.0.0.0`
+/// exposes an inference server to the LAN and requires an explicit
+/// confirmation naming that consequence (with no API key configured until
+/// T-051, it also raises a persistent warning). It is never a default. T-040
+/// carried `UNSPECIFIED` here while nothing bound the address; T-042 is what
+/// makes it operational, so the value is corrected with the listener rather
+/// than left to expose a machine on first launch.
 pub fn default_server_config() -> ServerConfig {
     ServerConfig {
-        listen_address: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        listen_address: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
         listen_port: 8080,
         upstream_port_range: (49500, 49999),
         startup_hold_seconds: 120,
@@ -796,6 +903,12 @@ struct Actor {
     worker: Option<ProbeWorker>,
 
     state: ServerState,
+    /// The listener's lifecycle. §2 puts it under this actor so that the two
+    /// lifecycle are consistent without being conflated: `EndpointState` never
+    /// transitions with `ServerState`, but the same thread answers for both,
+    /// which is what makes `get_server_state` + `get_endpoint_state` a coherent
+    /// pair rather than two snapshots taken at different times.
+    endpoint: EndpointState,
     child: Option<Box<dyn ManagedChild>>,
     /// Bumped on every transition: a probe whose result belongs to a state we
     /// have left is discarded rather than applied to the new one.
@@ -835,6 +948,10 @@ impl Actor {
             deps,
             worker: None,
             state: ServerState::Stopped,
+            // Nothing has tried to bind yet. A failed bind is reported by the
+            // listener itself and replaces this; the two are different facts
+            // and the dashboard of T-045 renders them differently.
+            endpoint: EndpointState::Unbound,
             child: None,
             generation: 0,
             probe_in_flight: None,
@@ -967,6 +1084,12 @@ impl Actor {
             SupervisorCommand::MarkConfigDirty(reply) => {
                 let _ = reply.send(self.cmd_mark_config_dirty());
             }
+            SupervisorCommand::ReportEndpointState(state, reply) => {
+                let _ = reply.send(Ok(self.cmd_report_endpoint_state(state)));
+            }
+            SupervisorCommand::GetEndpointState(reply) => {
+                let _ = reply.send(Ok(self.endpoint.clone()));
+            }
         }
     }
 
@@ -1062,6 +1185,22 @@ impl Actor {
         self.clear_run_context();
         self.set_state(ServerState::Stopped);
         Ok(self.state.clone())
+    }
+
+    /// Store the listener's lifecycle and broadcast it.
+    ///
+    /// The state is *replaced*, not merged with `ServerState`: §2 is explicit
+    /// that the two do not transition together, so nothing here consults the
+    /// server when the endpoint reports a bind.
+    fn cmd_report_endpoint_state(&mut self, state: EndpointState) -> EndpointState {
+        if self.endpoint == state {
+            // A repeat is not a change, and an event per repeat would make the
+            // renderer redraw for nothing.
+            return self.endpoint.clone();
+        }
+        self.endpoint = state;
+        self.deps.events.endpoint_state_changed(&self.endpoint);
+        self.endpoint.clone()
     }
 
     fn cmd_mark_config_dirty(&mut self) -> Result<(), AppError> {
