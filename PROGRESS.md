@@ -21,7 +21,7 @@ Next candidate: T-041. T-006 remains `Blocked` on D-005.
 
 ## In progress
 
-*Nothing in progress. A document change is in flight on branch `docs/milestone-g-registry-gaps` — the owner's three decisions of 20 September 2026 (Milestone G for D-016, T-048 for D-018, the 10 s grace confirmed), recorded on the D-entries' `Status:` lines above and in `docs/TASKS.md`/`PLAN.md` §4. It touches no code and lands as a document PR.*
+*Nothing in progress. A document change is open as **PR #37** on branch `docs/milestone-g-registry-gaps` — the owner's three decisions of 20 September 2026 (Milestone G for D-016, T-048 for D-018, the 10 s grace confirmed), recorded on the D-entries' `Status:` lines above and in `docs/TASKS.md`/`PLAN.md` §4. It touches no code; the milestone's tasks enter the selection rule when the PR merges.*
 
 ## Done
 
