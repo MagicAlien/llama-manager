@@ -59,6 +59,14 @@ One change in v6.5:
 | — | **T-038** KV-cache accuracy and speculative memory accounting | new: same session — the projection read too large and omitted the draft model |
 | — | **T-039** registration channel from the observed interface | new: same session — D-015; the help text cannot answer the question and the stored `Undetermined` blocks every preset |
 
+
+One change in v6.6:
+
+| v6.5 | v6.6 | |
+|---|---|---|
+| — | **T-048** the server starts on the one slot the estimator prices | new: owner-commissioned on 20 September 2026 — D-018, the slot count T-038 assigned to T-040 |
+| — | **T-070…T-075** Milestone G — Registry completeness | new: owner-commissioned the same day — D-016's seven T-031 acceptance gaps, which had no home |
+
 ---
 
 ## Milestone A — Skeleton
@@ -409,6 +417,13 @@ Quit sequence, in order and without shortcuts: graceful stop → the **same 10-s
 
 *Acceptance:* Closing the window hides it and leaves `ServerState` and `EndpointState` unchanged, asserted by a client holding a connection across the close. The tray icon renders distinctly for Running, Stopped and Crashed, asserted over fixture states. A first-close notification is shown once and not on subsequent closes, asserted across a simulated restart. **Quit with a stub child that exits promptly leaves no process in the tree and no port bound; quit with a stub child that refuses to exit escalates to a tree kill after the shared grace constant and still leaves nothing behind** — both asserted by inspecting the process tree and attempting to re-bind the port immediately afterwards. A test asserts the grace value is read from one place, not duplicated. Quitting during a long unload shows progress and the window can be reopened while it runs. The session-end path is exercised against a simulated `WM_QUERYENDSESSION` and leaves no orphan. **On launch, a llama-server process left over from a previous run is detected and reported rather than ignored or silently killed.**
 
+### T-048 — The server starts on the one slot the estimator prices `[dep: T-040]`
+The launch plan emits `--parallel 1`, so the server the app starts is the server `core/estimator.rs` describes. That estimator prices a hybrid model's recurrent (SSM) state for **one** sequence, and a launch that passes no `--parallel` leaves the build on its own default — measured as **auto → 4** on the owner's Qwen3.8-27B, where one sequence costs 149.62 MiB and four cost 598.50 MiB (F-019, D-018). The projection therefore carries ~450 MiB of optimism on exactly the decision it exists to inform: how many layers fit in the card.
+
+Emit it where the command line is already generated — `preset_generator::router_arguments`, the server-level arguments (`docs/CONTRACTS.md` §5) — and gate it the way every other flag is gated: a key the active build's verified list does not carry is omitted with a `preset-warning`, never written hopefully, because the router refuses to start on a key it does not know — that failure is measured and recorded (`PROGRESS.md` D-014 and F-020), not theoretical. One slot is the conservative choice for VRAM and the count the model already assumes. **Raising it is a user's decision, not a default**: `ServerConfig` gains the slot count in T-050, whose screen renders it, and from that point the estimator is given the count rather than assuming one.
+
+*Acceptance:* The emitted router arguments contain `--parallel 1` exactly once, asserted on `router_arguments`'s own output for the active build rather than on the plan's intent, and with the neighbouring `--no-webui`/`--host`/`--port` entries unchanged. With a build whose verified flags carry no `--parallel` — the older captures this repo holds — no key is emitted and a warning is raised, asserted for both branches of that condition. **The mechanism is established from the build's own interface, never assumed**: `--parallel` is verified present in the active build's `verified_flags_json` (its `--help` capture, checked before writing this task), and if the server's own accounting shows the router applying a different count per model than the command line asked for, then the count is expressed the way that build expresses it — read out of its preset grammar — rather than by adding a second key hopefully. The estimator's `notes` states the slot assumption as one slot, so the figure is never silent about a count the caller may change. **Demonstrated on the installed build**: an end-to-end start reaches `Running` with the flag present in the launched command line, and the server's own accounting (`-lv`, the probe T-040 used) reports one slot for the model — a launch the app performs is what this task changes, so the evidence is a launch, not a snapshot.
+
 ---
 
 ## Milestone E — API
@@ -469,6 +484,46 @@ Signed MSI/NSIS, update channel.
 Playwright: first run → install runtime (stubbed release server) → attach folder → import synthetic model → configure → start (stub server) → **query through the app's endpoint** → stop → query again and receive the structured 503 → restart → query succeeds at the same address → close the window and confirm the endpoint still answers → quit from the tray and confirm nothing is left listening.
 
 *Acceptance:* The full path runs green in CI on a GPU-less runner using the stub runtime and synthetic fixtures. The suite fails loudly if any step silently no-ops. The final leg asserts the client used one unchanged address across the whole sequence — this is the behaviour `PLAN.md` §2.7 exists to deliver, and it is verified end to end rather than only in unit tests.
+
+---
+
+## Milestone G — Registry completeness
+
+Commissioned by the owner on 20 September 2026 (D-016): the seven items of T-031's acceptance list that the PR wiring the registry never satisfied. T-031 merged green on the strength of a DB layer built and tested — and never called: `list_models()` returned an empty vector forever and an import wrote no row, which is why the gaps survived a Done status and were only recorded in `PROGRESS.md` afterwards. None of them is a defect a screen exposed; they are the registry's own semantics, so they belong in one milestone rather than in whichever task next touches the file.
+
+The mapping, item by item (the letters are D-016's): **(a)** a shard set and a projector directory importing as one entry → **T-070**; **(b)** `duplicate_of` from `sha256_head` and **(c)** `served_name` uniqueness → **T-071**; **(d)** retained settings discarded when the file at a path is replaced → **T-072**; **(e)** NVFP4 classified `SupportedWithWarnings` → **T-073**; **(f)** the import queue's parallelism and its real `import-progress` events → **T-074**; **(g)** `remove_model` on a `Loading`/`Loaded` model returning `InvalidTransition` → **T-075**.
+
+This milestone is numbered after Milestone D for a reason and not for spacing: **(g) needs the load state T-041's orchestrator owns**, so its task cannot be numbered below T-041 — and once one task in a milestone sits there, the milestone does. Every other dependency is already Done.
+
+### T-070 — A multi-file model imports as one entry `[dep: T-030, T-031]`
+A model spread over `-NNNNN-of-MMMMM.gguf` shards, and a directory holding a model plus its projector, each import as **one** `ModelEntry` — never one entry per file. The set is resolved through the reader's own resolution (`gguf::scan_directory`), which already knows the shard convention and both projector naming forms; what this task adds is the registry's side: `shard_paths` and `mmproj_path` populated from the set, the base name taken from the `-of-` split rather than from the last dash, and an incomplete set refused as a named error instead of entering the catalogue half-formed.
+
+*Acceptance:* Importing a five-shard fixture set creates exactly one entry whose `shard_paths.len() == 5` and whose file size is the sum of the parts. A directory holding one model plus `mmproj-F16.gguf` creates one entry whose `mmproj_path` is the projector, and the projector is not itself imported as a model. A set with one shard absent creates **no** entry and fails with an error naming the missing index. Importing a shard file directly and then the whole directory updates that same entry instead of adding a second. The duplicate/uniqueness rules of T-071 do not fire for the members of one set, asserted over the same fixtures.
+
+### T-071 — Identity: two copies of a file, and names that stay apart `[dep: T-031, T-070]`
+Identity is the absolute path (`PLAN.md` §2.13): importing the same path twice updates one entry. Two **different** paths holding the same content are two entries — the user has two copies of a model on two drives and decides what to do — but the second carries `duplicate_of`, derived from `sha256_head`, and the UI says so. `served_name` is derived from the display name and made unique across the catalogue, so two identical basenames on different drives stay separately addressable in the router's own report.
+
+*Acceptance:* Importing two fixture paths with identical content creates two entries, the second carrying `duplicate_of` set to the first's id, and the Models screen renders that state (a frontend test over the entry shape, not only a backend one). `sha256_head` is computed from a bounded prefix and never by hashing a whole file, asserted by reading no more than the budgeted bytes from the 65 GB sparse fixture. `served_name` collisions are resolved deterministically — the same catalogue produces the same names across runs, asserted by importing the colliding fixtures twice and comparing — and the preset the generator writes cannot contain the same model name twice.
+
+### T-072 — A replaced file loses the settings the path used to carry `[dep: T-031, T-071]`
+Removal retains a model's `LaunchParams`, `SamplingDefaults`, `preload`, `pinned` and `launch_history`, keyed by absolute path (`PLAN.md` §2.9); re-importing the same file restores them. A **different** file placed at the same path is not the same model: its retained settings are discarded on the `sha256_head` mismatch, never applied. The discard is not silent — it is what keeps a stale `ctx_size` from being attached to a model nobody tuned.
+
+*Acceptance:* The round trip is asserted end to end — remove, re-import the same file, and `LaunchParams`, `SamplingDefaults`, `preload`, `pinned` and `launch_history` are restored, with the estimator returning `Calibrated` rather than `Heuristic` afterwards. Replacing the file with a different one at the same path yields an entry whose settings are the import-time defaults, whose `launch_history` is empty, and whose calibration is `Heuristic` — asserted, not inferred. The mismatch path is observable: a test asserts the event or log line that records the discard, so a user can tell a reset from a lost edit.
+
+### T-073 — An NVFP4 model is accepted with a warning that states what is unproven `[dep: T-030, T-038]`
+`PLAN.md` §2.6: NVFP4 is recognized, labelled experimental and not asserted. Such a model is classified `SupportedWithWarnings` with an `experimental: true` note saying the **memory profile is modelled but the speedup is unconfirmed on the active build** — never claiming acceleration is present, never claiming it is absent. Which key identifies the quantization is established from a real file rather than assumed: D-013 records that a real NVFP4 writer sets `general.file_type = 7` (Q8_0) while its `description` names the NVFP4 backbone, so `file_type` alone does not answer the question and a rule keyed on it would classify the owner's own models wrongly.
+
+*Acceptance:* The synthetic NVFP4 fixture is classified `SupportedWithWarnings` with the note's wording asserted verbatim, including `experimental: true`. The owner's real files (whose `file_type` and `description` disagree, D-013) are classified by the same rule, asserted against the header shape those files carry. A non-NVFP4 fixture asserts the absence of both the variant and the note — the ordinary case renders nothing (T-037's rule), and the warning appears only where it is informative.
+
+### T-074 — Import runs four at a time and says how far it is `[dep: T-031, T-070]`
+Import is a background queue at parallelism 4, cancellable, with per-file progress over `import-progress` events. This is the item where a resolve value is not evidence: a command that returns a job id while a thread does the work is a race by construction, and a progress payload whose counters are constants is worse than no payload — this repo has shipped both.
+
+*Acceptance:* Importing 200 synthetic fixtures completes with a bounded worker count (four, asserted) and no unbounded memory growth. The `import-progress` sequence is asserted as a sequence: `completed` increases monotonically, its final value equals `total`, and no event claims a count the catalogue does not hold — read from collected events, never from the emitting code. Cancelling mid-import leaves a consistent catalogue with **no** partial entries, and the files already imported stay registered. A per-file failure does not abort the batch and is reported for that file.
+
+### T-075 — Removing a model the server is using is refused, typed `[dep: T-031, T-041]`
+`remove_model` while a model is `Loading` or `Loaded` returns `InvalidTransition` — the transition rule of `docs/CONTRACTS.md` §2, enforced against the load state the orchestrator owns rather than against a local guess. This is the one gap that had no possible implementation until T-040 and T-041 existed: nothing in the app knew what was loaded.
+
+*Acceptance:* With the state `Loading` or `Loaded`, `remove_model` returns the **typed** `InvalidTransition` — asserted on the returned `AppError`, not on a generic internal error — and the entry survives with its settings. With the server `Stopped`, the same call removes the entry and keeps the retention rules of T-072. The guard is asserted through the IPC path the Models screen calls, not only through the core function, because a guard the UI cannot reach is not a guard. Removing a model that is loaded under a *different* entry never trips the guard, asserted separately.
 
 ---
 

@@ -449,11 +449,12 @@ llama-manager/
 | **A — Skeleton** | T-000…T-006 | CI, scaffold, DB, error model, design system, documentation lint |
 | **B — Runtime** | T-010…T-025 | Environment probing, binary install, version management, flag verification, empirical router probe |
 | **C — Catalogue** | T-029…T-039 | Paths, GGUF reader, registry, estimator, preset generation, model screens, speculative decoding, capability tags, memory accounting, registration-channel binding |
-| **D — Server** | T-040…T-047 | Supervisor, orchestrator, endpoint transport and behaviour, diagnostics, dashboard, logs, tray and shutdown |
+| **D — Server** | T-040…T-048 | Supervisor, orchestrator, endpoint transport and behaviour, diagnostics, dashboard, logs, tray and shutdown |
 | **E — API** | T-050…T-052 | API screen, auth and request log, client contract tests |
 | **F — Release** | T-060…T-065 | Telemetry, multi-GPU, crash recovery, settings, installer, E2E |
+| **G — Registry completeness** | T-070…T-075 | The seven T-031 acceptance gaps: multi-file import, duplicate identity, name uniqueness, replacement semantics, the NVFP4 warning, the import queue, removal under load |
 
-Structural changes since v5.0: the preset generator moved from D into C, because two Milestone C screens assert byte-identical output against it and could not do so while it lived downstream; Milestone D absorbed the endpoint listener; and v6.3 added T-025 to Milestone B, moving the empirical router questions out of the owner's checklist and into the task list.
+Structural changes since v5.0: the preset generator moved from D into C, because two Milestone C screens assert byte-identical output against it and could not do so while it lived downstream; Milestone D absorbed the endpoint listener; and v6.3 added T-025 to Milestone B, moving the empirical router questions out of the owner's checklist and into the task list. v6.6 does two things the same way: it extends Milestone D with the slot count the server is launched on (D-018) and adds **Milestone G**, which is where the seven T-031 acceptance gaps recorded as D-016 finally have a home — a delivered task's acceptance list is the specification, so its unmet items are tasks, not footnotes. Milestone G is numbered after D because one of its seven needs the load state T-041 owns.
 
 No milestone is gated on hardware access. The owner's verification checklist covers only what a GPU-less machine genuinely cannot answer, and feeds corrections back as follow-up tasks.
 
