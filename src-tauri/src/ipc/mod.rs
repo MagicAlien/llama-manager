@@ -28,12 +28,13 @@ use crate::core::gguf;
 use crate::core::gh_releases;
 use crate::core::installer;
 use crate::core::model_registry;
+use crate::core::orchestrator;
 use crate::core::preset_generator;
 use crate::core::supervisor;
 use crate::core::types::{
     AppError, AvailableRelease, Backend, DraftModelInputs, EnvironmentReport, EstimateInputs,
-    ImportJobId, ImportProgress, InstallProgress, LaunchParams, ModelEntry, SamplingDefaults,
-    VramEstimate, WatchedFolder,
+    ImportJobId, ImportProgress, InstallProgress, LaunchParams, LoadedModelState, ModelEntry,
+    SamplingDefaults, VramEstimate, WatchedFolder,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -184,6 +185,36 @@ pub async fn dismiss_crash() -> Result<crate::core::types::ServerState, AppError
     blocking(|| supervisor::handle()?.dismiss_crash()).await
 }
 
+/// `docs/CONTRACTS.md` §4: `get_loaded_models | — | Vec<LoadedModelState> | T-041`.
+///
+/// The last snapshot the orchestrator's poller published. It does not call the
+/// server: the poller keeps this within one poll interval (2 s) of the truth, and
+/// a screen must never wait on a socket to render. A state change arrives as
+/// `model-load-state-changed` — §4's rule that the renderer does not poll.
+#[tauri::command]
+pub async fn get_loaded_models() -> Result<Vec<LoadedModelState>, AppError> {
+    blocking(|| orchestrator::handle().map(|handle| handle.snapshot())).await
+}
+
+/// `docs/CONTRACTS.md` §4: `load_model | id | () | T-041`.
+///
+/// Runs on Tauri's blocking pool, not on an async worker: a load is minutes on a
+/// 65 GB model, and the orchestrator talks to the server synchronously. Progress
+/// does not wait for this call to return — every state the server reports is
+/// published as `model-load-state-changed` while the load is still in flight.
+/// The command returns when the model is ready, failed, or past the load
+/// timeout, so a caller can see the failure as a rejected `invoke`.
+#[tauri::command]
+pub async fn load_model(id: String) -> Result<(), AppError> {
+    blocking(move || orchestrator::handle()?.load(&id).map(|_outcome| ())).await
+}
+
+/// `docs/CONTRACTS.md` §4: `unload_model | id | () | T-041`.
+#[tauri::command]
+pub async fn unload_model(id: String) -> Result<(), AppError> {
+    blocking(move || orchestrator::handle()?.unload(&id)).await
+}
+
 /// Ask the supervisor for the current state without blocking a Tokio worker.
 ///
 /// The actor answers in microseconds, but it is a *blocking* channel and this
@@ -268,6 +299,42 @@ pub fn start_supervisor(app: tauri::AppHandle) -> Result<(), AppError> {
     // screen having to exist yet (the Dashboard is T-045). Nothing else in the
     // startup path reports its success.
     tracing::info!("server supervisor started");
+    Ok(())
+}
+
+/// T-041's event: `model-load-state-changed` carrying the whole snapshot (§4).
+///
+/// Same shape as `TauriEvents`: `core/` reports through a trait and this adapter
+/// turns it into a Tauri event, because `core/` must not import `tauri`
+/// (`AGENTS.md` invariant 1).
+pub struct TauriOrchestratorEvents {
+    app: tauri::AppHandle,
+}
+
+impl TauriOrchestratorEvents {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        TauriOrchestratorEvents { app }
+    }
+}
+
+impl orchestrator::OrchestratorEvents for TauriOrchestratorEvents {
+    fn model_load_state_changed(&self, models: &[LoadedModelState]) {
+        if let Err(err) = self.app.emit("model-load-state-changed", models.to_vec()) {
+            tracing::warn!("could not emit model-load-state-changed: {err}");
+        }
+    }
+}
+
+/// Start the model orchestrator and its poller. Called once, from `main.rs`'s
+/// setup hook, right after the supervisor it reads the upstream port from.
+pub fn start_orchestrator(app: tauri::AppHandle) -> Result<(), AppError> {
+    let events: Arc<dyn orchestrator::OrchestratorEvents> =
+        Arc::new(TauriOrchestratorEvents::new(app));
+    let deps = orchestrator::production_deps(events, orchestrator::Tuning::default())?;
+    orchestrator::install(orchestrator::spawn(deps))?;
+    // One line, like the supervisor's: the app's own log should answer "is the
+    // model poller up?" without a screen existing yet (the Dashboard is T-045).
+    tracing::info!("model orchestrator started");
     Ok(())
 }
 
@@ -570,6 +637,20 @@ pub fn estimate_vram(
             metadata: gguf::parse_file(path).ok(),
         });
 
+    // T-041 writes one `launch_history` row per load attempt, keyed by the
+    // model's absolute path; the estimator reads them here. §3 is explicit that
+    // this read is why the write exists — without it the calibration path
+    // (bias correction from past launches) is dead code. A read failure costs
+    // the estimate its calibration, never the screen its number.
+    let history_path = model.file_path.display().to_string();
+    let history = orchestrator::launch_records_for(&history_path).unwrap_or_else(|err| {
+        tracing::warn!(
+            path = %history_path,
+            "could not read the launch history; estimating without calibration: {err}"
+        );
+        Vec::new()
+    });
+
     let inputs = EstimateInputs {
         metadata: model.metadata,
         file_size_bytes: model.size_bytes,
@@ -581,8 +662,7 @@ pub fn estimate_vram(
         ram_free_bytes,
     };
 
-    // No history for now — T-041 writes launch_history, T-032 reads it
-    Ok(estimator::estimate(&inputs, &[]))
+    Ok(estimator::estimate(&inputs, &history))
 }
 
 /// `docs/CONTRACTS.md` §4: `preview_preset | id: String | String | T-033`.

@@ -288,6 +288,19 @@ export type LinkCapability = "Symlink" | "HardLinkOnly" | "None";
 // ---- LoadedModelState ----
 export type LoadedModelState = { model_id: string, state: ModelLoadState, vram_bytes: bigint | null, last_used: string | null, error: string | null, };
 
+// ---- LoadOutcome ----
+/**
+ * What one load attempt cost, and what it says about VRAM. `docs/CONTRACTS.md`
+ * §5 declares this type beside the orchestrator trait, and says plainly what it
+ * is for: "`LoadOutcome` is what T-041 writes into `launch_history`."
+ *
+ * `vram_bytes` is `Option` for a measured reason rather than for symmetry: the
+ * router's own `/models` reports no per-model VRAM figure on the installed
+ * build (see `core::orchestrator`'s module docs), so T-041 has nothing to put
+ * there yet and records `None` rather than a guess.
+ */
+export type LoadOutcome = { load_seconds: number, vram_bytes: bigint | null, };
+
 // ---- ModelAvailability ----
 export type ModelAvailability = "Present" | "Missing" | "Unreadable";
 

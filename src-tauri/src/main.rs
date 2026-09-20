@@ -133,6 +133,14 @@ fn main() {
             if let Err(err) = ipc::start_supervisor(app.handle().clone()) {
                 tracing::error!("could not start the server supervisor: {err}");
             }
+            // T-041 — the model orchestrator's poller. It reads the upstream
+            // port from the supervisor above, so it is started after it. A
+            // failure to start is logged and not fatal: the screens that show
+            // loaded models (T-045) fail with a clear error rather than a fake
+            // empty list.
+            if let Err(err) = ipc::start_orchestrator(app.handle().clone()) {
+                tracing::error!("could not start the model orchestrator: {err}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -147,6 +155,9 @@ fn main() {
             ipc::start_server,
             ipc::stop_server,
             ipc::dismiss_crash,
+            ipc::get_loaded_models,
+            ipc::load_model,
+            ipc::unload_model,
             ipc::import_models,
             ipc::get_import_status,
             ipc::cancel_import,
