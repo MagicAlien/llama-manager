@@ -29,6 +29,7 @@ use crate::core::gh_releases;
 use crate::core::installer;
 use crate::core::model_registry;
 use crate::core::preset_generator;
+use crate::core::supervisor;
 use crate::core::types::{
     AppError, AvailableRelease, Backend, DraftModelInputs, EnvironmentReport, EstimateInputs,
     ImportJobId, ImportProgress, InstallProgress, LaunchParams, ModelEntry, SamplingDefaults,
@@ -87,11 +88,17 @@ pub fn list_runtimes() -> Result<Vec<crate::core::types::RuntimeBuild>, AppError
 /// Sets the specified build as the active runtime. The active build is used
 /// on the next server start. Multiple active builds are rejected by the
 /// database's unique index, so this command first deactivates all others.
+///
+/// **Rejected while the server is not `Stopped`** (`docs/CONTRACTS.md` §2,
+/// "Rejected commands"): the running process was started from this build's
+/// files, so switching it underneath the process is not something the app does
+/// implicitly.
 #[tauri::command]
-pub fn activate_runtime(
+pub async fn activate_runtime(
     tag: String,
     backend: Backend,
 ) -> Result<crate::core::types::RuntimeBuild, AppError> {
+    supervisor::reject_unless_stopped(&server_state().await?, "activate_runtime")?;
     let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
         message: "could not determine the database path".into(),
     })?;
@@ -102,10 +109,11 @@ pub fn activate_runtime(
 /// `docs/CONTRACTS.md` §4: `remove_runtime | tag, backend | () | T-024`.
 ///
 /// Removes a runtime build from the database and deletes its files.
-/// Cannot remove the last remaining build or an active build while the
-/// server is running (checked by the caller).
+/// Cannot remove the last remaining build (`installer::remove_runtime_on`),
+/// nor any build while the server is not `Stopped` (§2, same rule as above).
 #[tauri::command]
-pub fn remove_runtime(tag: String, backend: Backend) -> Result<(), AppError> {
+pub async fn remove_runtime(tag: String, backend: Backend) -> Result<(), AppError> {
+    supervisor::reject_unless_stopped(&server_state().await?, "remove_runtime")?;
     let db_path = installer::database_path().ok_or_else(|| AppError::Internal {
         message: "could not determine the database path".into(),
     })?;
@@ -137,12 +145,130 @@ pub fn get_active_runtime() -> Result<Option<crate::core::types::RuntimeBuild>, 
 
 /// `docs/CONTRACTS.md` §4: `get_server_state | — | ServerState | T-040`.
 ///
-/// Returns the current server state. Until T-040 is implemented, this
-/// always returns "Stopped" — the server process supervisor does not
-/// exist yet, so the server can never be running.
+/// The state the supervisor actor owns. It is the authority the Runtime screen
+/// and the tray render from, and the one `start_server`/`stop_server` move.
 #[tauri::command]
-pub fn get_server_state() -> Result<crate::core::types::ServerState, AppError> {
-    Ok(crate::core::types::ServerState::Stopped)
+pub async fn get_server_state() -> Result<crate::core::types::ServerState, AppError> {
+    server_state().await
+}
+
+/// `docs/CONTRACTS.md` §4: `start_server | — | ServerState | T-040`.
+///
+/// Takes no configuration argument on purpose (§4): what to start comes from the
+/// database — the active build, the catalogue and the stored `ServerConfig` —
+/// which removes the class of bug where a screen holds a stale copy and
+/// reapplies it at start.
+///
+/// The reply is `Starting { WaitingForProcess }`: the call answers as soon as the
+/// preset is written and the process spawned, and every later transition arrives
+/// as a `server-state-changed` event. Waiting for `Running` here would block the
+/// UI for as long as a 65 GB preload takes, which is exactly the mistake §2's
+/// two-phase startup exists to avoid.
+#[tauri::command]
+pub async fn start_server() -> Result<crate::core::types::ServerState, AppError> {
+    blocking(|| supervisor::handle()?.start()).await
+}
+
+/// `docs/CONTRACTS.md` §4: `stop_server | — | ServerState | T-040`.
+///
+/// Answers `Stopping` immediately; the process may take the shared 10 s grace
+/// window to die, and `server-state-changed` reports `Stopped` when it has.
+#[tauri::command]
+pub async fn stop_server() -> Result<crate::core::types::ServerState, AppError> {
+    blocking(|| supervisor::handle()?.stop()).await
+}
+
+/// `docs/CONTRACTS.md` §4: `dismiss_crash | — | ServerState | T-040`.
+#[tauri::command]
+pub async fn dismiss_crash() -> Result<crate::core::types::ServerState, AppError> {
+    blocking(|| supervisor::handle()?.dismiss_crash()).await
+}
+
+/// Ask the supervisor for the current state without blocking a Tokio worker.
+///
+/// The actor answers in microseconds, but it is a *blocking* channel and this
+/// module runs on Tauri's runtime: a direct call would park a worker thread for
+/// as long as the actor takes, which is not a property worth leaving to chance.
+async fn server_state() -> Result<crate::core::types::ServerState, AppError> {
+    blocking(|| supervisor::handle()?.state()).await
+}
+
+async fn blocking<T, F>(work: F) -> Result<T, AppError>
+where
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|err| AppError::Internal {
+            message: format!("the supervisor call could not be completed: {err}"),
+        })?
+}
+
+/// The supervisor's events, as the Tauri events `docs/CONTRACTS.md` §4 names
+/// (`server-state-changed`, `server-log-line`, `preset-warning`).
+///
+/// `core/` must not know about Tauri (`AGENTS.md` invariant 1), so the actor
+/// reports through `core::supervisor::SupervisorEvents` and this adapter — the
+/// same shape `install_runtime` already uses for `install-progress` — turns them
+/// into events. A failed emit is logged, never fatal: the app's own state is
+/// already correct without the screen.
+pub struct TauriEvents {
+    app: tauri::AppHandle,
+}
+
+impl TauriEvents {
+    pub fn new(app: tauri::AppHandle) -> Self {
+        TauriEvents { app }
+    }
+}
+
+impl supervisor::SupervisorEvents for TauriEvents {
+    fn state_changed(&self, state: &crate::core::types::ServerState) {
+        if let Err(err) = self.app.emit("server-state-changed", state.clone()) {
+            tracing::warn!("could not emit server-state-changed: {err}");
+        }
+    }
+
+    fn log_line(&self, line: &crate::core::process::LogLine) {
+        if let Err(err) = self.app.emit("server-log-line", line.clone()) {
+            tracing::warn!("could not emit server-log-line: {err}");
+        }
+    }
+
+    fn preset_warning(&self, warning: &preset_generator::PresetWarning) {
+        // The event payload is `{ model_id, flag, reason }` (§4), while
+        // `PresetWarning` names the field `model` — T-033's own wording. The
+        // adapter maps rather than renaming the type in a task that did not
+        // define it, so the event matches the document exactly.
+        #[derive(Clone, serde::Serialize)]
+        struct PresetWarningPayload<'a> {
+            model_id: &'a str,
+            flag: &'a str,
+            reason: &'a str,
+        }
+        let payload = PresetWarningPayload {
+            model_id: &warning.model,
+            flag: &warning.flag,
+            reason: &warning.reason,
+        };
+        if let Err(err) = self.app.emit("preset-warning", payload) {
+            tracing::warn!("could not emit preset-warning: {err}");
+        }
+    }
+}
+
+/// Start the supervisor actor and install its handle. Called once, from
+/// `main.rs`'s setup hook, before any IPC can reach it.
+pub fn start_supervisor(app: tauri::AppHandle) -> Result<(), AppError> {
+    let events: Arc<dyn supervisor::SupervisorEvents> = Arc::new(TauriEvents::new(app));
+    let deps = supervisor::production_deps(events, supervisor::Tuning::default())?;
+    supervisor::install(supervisor::spawn(deps))?;
+    // One line, so the app's own log answers "is the supervisor up?" without a
+    // screen having to exist yet (the Dashboard is T-045). Nothing else in the
+    // startup path reports its success.
+    tracing::info!("server supervisor started");
+    Ok(())
 }
 
 /// `docs/CONTRACTS.md` §4: `install_runtime | tag, backend | () + install-progress events | T-022`.
