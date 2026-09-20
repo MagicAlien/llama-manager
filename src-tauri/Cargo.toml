@@ -52,6 +52,15 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemInformation",
     "Win32_Storage_FileSystem",
     "Win32_System_Registry",
+    # T-040 (core/process.rs): the supervisor must be able to kill the *tree* it
+    # started (the router spawns a child process per model, so terminating the
+    # root is not a stop) and to answer "is this pid still alive?" from the OS
+    # rather than from its own bookkeeping. ToolHelp's process snapshot gives
+    # the parent/child table; Threading gives OpenProcess/TerminateProcess/
+    # GetExitCodeProcess and CREATE_NO_WINDOW (a windowed app must not pop a
+    # console when it starts llama-server).
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 # T-022 (docs/TASKS.md, core/installer.rs): archive extraction, SHA-256 and

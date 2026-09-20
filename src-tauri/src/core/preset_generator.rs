@@ -238,6 +238,34 @@ impl<'b> PresetWriter<'b> {
         self.flag_value("--chat-template", params.chat_template.clone());
 
         self.speculative(entry)?;
+
+        // T-040: a model marked `preload` in the catalogue is loaded while the
+        // server starts, not on its first request. The router's own key for that
+        // is `load-on-startup`, verified by *behaviour* against b10883
+        // (PROGRESS.md F-020): a section carrying `load-on-startup = 1` made the
+        // router log `(startup) loading model <name>` before it answered
+        // anything, and the model's own state showed up in `/models`.
+        //
+        // It is a preset-only option and never a CLI flag, so `verified_flags`
+        // cannot vouch for it; what vouches for it is the preset interface,
+        // which is also the only place the key is read. On a build that
+        // registers models by scanning a directory the key would never be
+        // looked at — and per F-015 an unknown key is fatal for the whole
+        // server, so it is omitted and *named* rather than written for nobody.
+        if entry.preload {
+            if matches!(
+                self.build.registration_channel,
+                RegistrationChannel::PresetDeclaresPath
+            ) {
+                self.line("load-on-startup = 1\n".to_string());
+            } else {
+                self.warn(
+                    "load-on-startup",
+                    "this build registers models by scanning a directory, so it cannot be told \
+                     to load one at startup; the model will load on its first request instead",
+                );
+            }
+        }
         Ok(())
     }
 
@@ -523,6 +551,50 @@ mod tests {
         // No `served_name` key: the router has no such option, the section
         // name is the served name (F-015).
         assert!(!ini.contains("served_name"));
+    }
+
+    /// T-040: the catalogue's `preload` flag has to reach the router, or
+    /// `StartupPhase::Preloading` could never happen — the server would answer
+    /// immediately, no model would be loading, and `Running` would be reached
+    /// without applying the configuration the user asked for.
+    #[test]
+    fn a_preload_model_is_marked_load_on_startup() {
+        let mut model = test_model("1", "/models/model-1.gguf");
+        model.preload = true;
+        let build = test_build(RegistrationChannel::PresetDeclaresPath);
+
+        let plan = preset_plan(&build, &[model.clone()]).unwrap();
+        assert!(
+            plan.ini.contains("load-on-startup = 1"),
+            "a preloaded model must tell the router to load it at startup:\n{}",
+            plan.ini
+        );
+        assert!(
+            plan.warnings.is_empty(),
+            "the key is expressible on this channel: {:?}",
+            plan.warnings
+        );
+
+        // A model that is not marked preload emits nothing — the key is not a
+        // default, and writing it everywhere would load the whole catalogue.
+        model.preload = false;
+        let plan = preset_plan(&build, &[model.clone()]).unwrap();
+        assert!(!plan.ini.contains("load-on-startup"), "{}", plan.ini);
+
+        // On a scan-only build the key would never be read (the preset file is
+        // not even passed to the router), so it is omitted *and named* — an
+        // omission nobody can see is the failure this warning exists for.
+        model.preload = true;
+        let scan = test_build(RegistrationChannel::ScanOnly);
+        let plan = preset_plan(&scan, &[model]).unwrap();
+        assert!(!plan.ini.contains("load-on-startup"), "{}", plan.ini);
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        assert_eq!(plan.warnings[0].flag, "load-on-startup");
+        assert!(
+            plan.warnings[0].reason.contains("first request"),
+            "the warning must say what happens instead: {}",
+            plan.warnings[0].reason
+        );
     }
 
     #[test]

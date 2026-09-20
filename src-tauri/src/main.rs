@@ -121,6 +121,20 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // T-040 — the process supervisor owns `ServerState` from here on.
+            // It is started in `setup`, not before: the actor reports through
+            // Tauri events, so it needs the app handle, and starting it after
+            // the window exists cannot lose a state change to an event emitted
+            // into the void. Every IPC command that touches the server fails
+            // with a clear error rather than a fake "Stopped" if the handle is
+            // ever missing, which is why this is a hard failure to log and not
+            // a silent one.
+            if let Err(err) = ipc::start_supervisor(app.handle().clone()) {
+                tracing::error!("could not start the server supervisor: {err}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ipc::probe_environment,
             ipc::check_for_updates,
@@ -130,6 +144,9 @@ fn main() {
             ipc::remove_runtime,
             ipc::get_active_runtime,
             ipc::get_server_state,
+            ipc::start_server,
+            ipc::stop_server,
+            ipc::dismiss_crash,
             ipc::import_models,
             ipc::get_import_status,
             ipc::cancel_import,
