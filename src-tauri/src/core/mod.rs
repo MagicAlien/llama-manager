@@ -31,6 +31,9 @@ pub mod gh_releases;
 pub mod installer;
 pub mod model_paths;
 pub mod model_registry;
+pub mod orchestrator;
+#[cfg(test)]
+mod orchestrator_tests;
 pub mod preset_generator;
 pub mod process;
 pub mod speculative;

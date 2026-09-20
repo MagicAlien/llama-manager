@@ -931,6 +931,21 @@ pub struct LoadedModelState {
     pub error: Option<String>,
 }
 
+/// What one load attempt cost, and what it says about VRAM. `docs/CONTRACTS.md`
+/// §5 declares this type beside the orchestrator trait, and says plainly what it
+/// is for: "`LoadOutcome` is what T-041 writes into `launch_history`."
+///
+/// `vram_bytes` is `Option` for a measured reason rather than for symmetry: the
+/// router's own `/models` reports no per-model VRAM figure on the installed
+/// build (see `core::orchestrator`'s module docs), so T-041 has nothing to put
+/// there yet and records `None` rather than a guess.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(export)]
+pub struct LoadOutcome {
+    pub load_seconds: f64,
+    pub vram_bytes: Option<u64>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 #[ts(export)]
 pub struct TelemetrySnapshot {
