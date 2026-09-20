@@ -48,6 +48,12 @@ struct ChildState {
     kill_tree_calls: u32,
     /// Lines the child "produced", drained by the actor.
     logs: Vec<LogLine>,
+    /// Lines the child writes *as it dies*, handed over the first time its exit
+    /// status is observed. A real process writes its last words and then exits,
+    /// so the actor can only read them after it has noticed the exit — the
+    /// interleaving that loses the tail if the crash is built on the exit
+    /// status alone. Scripted rather than timed, so the test is deterministic.
+    dying_words: Vec<LogLine>,
 }
 
 /// A child whose whole observable behaviour is scripted.
@@ -62,7 +68,12 @@ impl ManagedChild for FakeChild {
     }
 
     fn try_wait(&mut self) -> Result<Option<i32>, AppError> {
-        Ok(self.state.lock().unwrap().exit_code)
+        let mut state = self.state.lock().unwrap();
+        if state.exit_code.is_some() && !state.dying_words.is_empty() {
+            let words = std::mem::take(&mut state.dying_words);
+            state.logs.extend(words);
+        }
+        Ok(state.exit_code)
     }
 
     fn request_graceful_stop(&mut self) -> Result<(), AppError> {
@@ -423,6 +434,9 @@ fn fast_tuning() -> Tuning {
         stop_grace: Duration::from_millis(150),
         kill_wait: Duration::from_millis(150),
         log_ring_capacity: 4,
+        // Bounded and short: the scripted child hands its dying words over
+        // immediately, so two empty reads end the drain in about a millisecond.
+        final_drain: Duration::from_millis(5),
     }
 }
 
@@ -1284,6 +1298,14 @@ fn a_child_that_exits_on_its_own_crashes_with_its_exit_code() {
             level: "error".to_string(),
             line: "0.00.001.000 E srv  llama_server: could not load model".to_string(),
         });
+        // ...and the line it writes as it dies, handed over only once the exit
+        // status is observed. A crash built on the exit alone loses this one,
+        // and it is the line a diagnosis reads.
+        state.dying_words.push(LogLine {
+            at: Utc::now(),
+            level: "error".to_string(),
+            line: "0.00.001.100 E srv  llama_server: failed to load model, exiting".to_string(),
+        });
     }
 
     let state = harness.wait_crashed();
@@ -1305,6 +1327,13 @@ fn a_child_that_exits_on_its_own_crashes_with_its_exit_code() {
             .iter()
             .any(|line| line.contains("could not load model")),
         "the crash must carry the child's own last words: {last_log:?}"
+    );
+    assert!(
+        last_log
+            .iter()
+            .any(|line| line.contains("failed to load model, exiting")),
+        "the tail must carry what the process wrote as it died, not only what \
+         happened to be drained before the exit was seen: {last_log:?}"
     );
     assert!(
         last_log.len() <= 4,

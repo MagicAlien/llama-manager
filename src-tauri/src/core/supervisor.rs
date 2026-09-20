@@ -104,6 +104,17 @@ pub struct Tuning {
     pub kill_wait: Duration,
     /// `ServerState::Crashed.last_log` carries this many lines of tail.
     pub log_ring_capacity: usize,
+    /// How long the actor keeps reading a child's output once its exit has been
+    /// observed, before the tail is frozen into `Crashed`.
+    ///
+    /// A process writes its last words and *then* dies, so the lines that
+    /// explain a crash are in flight exactly when the exit becomes visible —
+    /// both in the actor (the loop drains before it looks, `check_exit` looks
+    /// after it drains) and on the real pipe (the reader thread delivers the
+    /// final bytes asynchronously). Without this window the crash state carries
+    /// the app's own lines and none of the child's, which is the tail T-043
+    /// reads a diagnosis from.
+    pub final_drain: Duration,
 }
 
 impl Default for Tuning {
@@ -116,6 +127,7 @@ impl Default for Tuning {
             stop_grace: Duration::from_secs(10),
             kill_wait: Duration::from_secs(5),
             log_ring_capacity: 500,
+            final_drain: Duration::from_millis(50),
         }
     }
 }
@@ -1132,6 +1144,11 @@ impl Actor {
     }
 
     fn crash(&mut self, exit_code: Option<i32>, diagnosis: Option<Diagnosis>) {
+        // Before the tail is frozen: read the child's last words. Every crash
+        // path arrives here (an observed exit, an expired phase, three failed
+        // probes), and in all of them the lines that explain the failure are the
+        // ones written just before it — in flight, not yet drained.
+        self.final_drain();
         let root = self.child.as_ref().map(|child| child.pid());
         self.reap_tree(root, "after the crash");
         self.child = None;
@@ -1173,13 +1190,45 @@ impl Actor {
 
     // ─── The loop's own work ────────────────────────────────────
 
-    fn drain_logs(&mut self) {
+    /// Read whatever the child has produced since the last call, and report how
+    /// many lines that was.
+    fn drain_logs(&mut self) -> usize {
         let mut lines: Vec<LogLine> = Vec::new();
         if let Some(child) = self.child.as_mut() {
             child.drain_logs(&mut |line| lines.push(line));
         }
+        let drained = lines.len();
         for line in lines {
             self.record_log(&line);
+        }
+        drained
+    }
+
+    /// Keep reading the child's output for a bounded moment after its exit was
+    /// observed, so its last words reach the tail instead of being dropped.
+    ///
+    /// The loop's own drain runs *before* the state machine looks at the child,
+    /// so a line written between the two is missed by a single read — and on a
+    /// real pipe the reader thread delivers the final bytes a moment after the
+    /// process ends. Both are the same loss: a crash whose tail cannot say why.
+    /// Two consecutive empty reads mean the writer is gone and the drain stops
+    /// immediately, so a scripted child in a test costs about a millisecond.
+    fn final_drain(&mut self) {
+        let deadline = Instant::now() + self.deps.tuning.final_drain;
+        let mut empty_reads = 0;
+        loop {
+            if self.drain_logs() > 0 {
+                empty_reads = 0;
+            } else {
+                empty_reads += 1;
+                if empty_reads >= 2 {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
     }
 
