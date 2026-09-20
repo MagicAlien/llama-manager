@@ -22,12 +22,12 @@ use crate::core::process::{
     self, LogLine, ManagedChild, PortAllocator, ProcessLauncher, ServerLaunch, SystemLauncher,
 };
 use crate::core::supervisor::{
-    parse_router_models, plan_launch, reject_unless_stopped, spawn, state_label, Coordinator,
-    Registration, ServerContext, SupervisorDeps, SupervisorEvents, SupervisorHandle, Timeouts,
-    Tuning,
+    default_server_config, parse_router_models, plan_launch, reject_unless_stopped, spawn,
+    state_label, Coordinator, Registration, ServerContext, SupervisorDeps, SupervisorEvents,
+    SupervisorHandle, Timeouts, Tuning,
 };
 use crate::core::types::{
-    AppError, Backend, Compatibility, GgufMetadata, LaunchParams, LoadedModelState,
+    AppError, Backend, Compatibility, EndpointState, GgufMetadata, LaunchParams, LoadedModelState,
     ModelAvailability, ModelEntry, ModelLoadState, RegistrationChannel, RuntimeBuild,
     SamplingDefaults, ServerConfig, ServerState, StartupPhase, VerifiedFlag,
 };
@@ -280,6 +280,9 @@ struct Recorder {
     states: Mutex<Vec<ServerState>>,
     logs: Mutex<Vec<LogLine>>,
     warnings: Mutex<Vec<PresetWarning>>,
+    /// T-042: the listener's own lifecycle, recorded separately from
+    /// `ServerState` because §2 keeps the two apart.
+    endpoints: Mutex<Vec<EndpointState>>,
 }
 
 impl Recorder {
@@ -326,6 +329,11 @@ impl Recorder {
             .map(|line| line.line.clone())
             .collect()
     }
+
+    /// T-042: the listener's own lifecycle, in the order it was reported.
+    fn endpoints(&self) -> Vec<EndpointState> {
+        self.endpoints.lock().unwrap().clone()
+    }
 }
 
 impl SupervisorEvents for Recorder {
@@ -339,6 +347,10 @@ impl SupervisorEvents for Recorder {
 
     fn preset_warning(&self, warning: &PresetWarning) {
         self.warnings.lock().unwrap().push(warning.clone());
+    }
+
+    fn endpoint_state_changed(&self, state: &EndpointState) {
+        self.endpoints.lock().unwrap().push(state.clone());
     }
 }
 
@@ -1911,4 +1923,81 @@ fn the_installed_build_starts_and_stops_without_leaving_a_process_behind() {
     for line in events.lines() {
         println!("  log: {line}");
     }
+}
+// ─── The listener's lifecycle (T-042) ───────────────────────────
+
+/// `docs/CONTRACTS.md` §2: **"`EndpointState` is not part of `ServerState` and
+/// does not transition with it"** — but it *is* owned by the same actor, so a
+/// `get_server_state` and a `get_endpoint_state` are a coherent pair rather
+/// than two snapshots taken at different times. This drives that ownership
+/// through the public handle, which is how the IPC layer reaches it.
+#[test]
+fn the_endpoint_state_is_owned_by_the_actor_and_broadcast_when_it_changes() {
+    let harness = Harness::new(
+        build_fixture(install_dir_with_server("endpoint")),
+        Vec::new(),
+        default_timeouts(),
+    );
+
+    // Nothing has tried to bind yet. That is a different fact from a bind that
+    // failed, and T-045's dashboard renders them differently.
+    assert_eq!(
+        harness.handle.endpoint_state().unwrap(),
+        EndpointState::Unbound
+    );
+    assert!(harness.events.endpoints().is_empty());
+
+    let address = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    let bound = EndpointState::Bound {
+        address,
+        port: 8080,
+    };
+    assert_eq!(
+        harness.handle.report_endpoint_state(bound.clone()).unwrap(),
+        bound
+    );
+    assert_eq!(harness.handle.endpoint_state().unwrap(), bound);
+    assert_eq!(harness.events.endpoints(), vec![bound.clone()]);
+
+    // A repeat is not a change: one report, one event, or the renderer redraws
+    // for nothing.
+    harness.handle.report_endpoint_state(bound).unwrap();
+    assert_eq!(harness.events.endpoints().len(), 1);
+
+    let failed = EndpointState::BindFailed {
+        address,
+        port: 8080,
+        error: AppError::PortInUse { port: 8080 },
+    };
+    harness
+        .handle
+        .report_endpoint_state(failed.clone())
+        .unwrap();
+    assert_eq!(harness.handle.endpoint_state().unwrap(), failed);
+    assert_eq!(harness.events.endpoints().len(), 2);
+
+    // And the server did not move: the two lifecycles are separate values with
+    // one owner, which is the whole point of §2's split.
+    assert!(matches!(harness.state(), ServerState::Stopped));
+}
+
+/// `PLAN.md` §2.7 and §6, and `docs/CONTRACTS.md` §1, all state that the app's
+/// listener defaults to `127.0.0.1`; binding `0.0.0.0` "exposes an inference
+/// server to the LAN and requires explicit confirmation naming that
+/// consequence", and with no API key configured (T-051) it also raises a
+/// persistent warning. T-042 is the task that makes the stored address
+/// operational — it is what the listener binds — so the default is pinned here
+/// rather than left to a value nobody reads.
+#[test]
+fn the_default_listen_address_is_loopback() {
+    let config = default_server_config();
+    assert_eq!(
+        config.listen_address,
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    );
+    // The two values T-042 reads besides the address: the port is the app's
+    // contract with configured clients, and an unset limit means the app
+    // imposes none of its own (`max_concurrent_requests`).
+    assert_eq!(config.listen_port, 8080);
+    assert_eq!(config.max_concurrent_requests, None);
 }

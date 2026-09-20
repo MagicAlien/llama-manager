@@ -22,6 +22,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use crate::core::endpoint;
 use crate::core::env_probe;
 use crate::core::estimator;
 use crate::core::gguf;
@@ -32,12 +33,12 @@ use crate::core::orchestrator;
 use crate::core::preset_generator;
 use crate::core::supervisor;
 use crate::core::types::{
-    AppError, AvailableRelease, Backend, DraftModelInputs, EnvironmentReport, EstimateInputs,
-    ImportJobId, ImportProgress, InstallProgress, LaunchParams, LoadedModelState, ModelEntry,
-    SamplingDefaults, VramEstimate, WatchedFolder,
+    AppError, AvailableRelease, Backend, DraftModelInputs, EndpointState, EnvironmentReport,
+    EstimateInputs, ImportJobId, ImportProgress, InstallProgress, LaunchParams, LoadedModelState,
+    ModelEntry, SamplingDefaults, VramEstimate, WatchedFolder,
 };
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tauri::Emitter;
 
 /// `docs/CONTRACTS.md` §4: `probe_environment | — | EnvironmentReport | T-010`.
@@ -151,6 +152,18 @@ pub fn get_active_runtime() -> Result<Option<crate::core::types::RuntimeBuild>, 
 #[tauri::command]
 pub async fn get_server_state() -> Result<crate::core::types::ServerState, AppError> {
     server_state().await
+}
+
+/// `docs/CONTRACTS.md` §4: `get_endpoint_state | — | EndpointState | T-042`.
+///
+/// The listener's own lifecycle, which §2 keeps deliberately separate from
+/// `ServerState`: the endpoint is bound while the server is stopped, and a
+/// `BindFailed` endpoint is a different problem from a stopped server — the
+/// dashboard (T-045) must not conflate them. Read from the supervisor, which
+/// owns the value the listener reported.
+#[tauri::command]
+pub async fn get_endpoint_state() -> Result<EndpointState, AppError> {
+    blocking(|| supervisor::handle()?.endpoint_state()).await
 }
 
 /// `docs/CONTRACTS.md` §4: `start_server | — | ServerState | T-040`.
@@ -287,12 +300,27 @@ impl supervisor::SupervisorEvents for TauriEvents {
             tracing::warn!("could not emit preset-warning: {err}");
         }
     }
+
+    /// T-042's event: `endpoint-state-changed` carrying the whole
+    /// `EndpointState` (§4). It is emitted from the supervisor's own adapter
+    /// because the supervisor is what owns the value — the listener reports to
+    /// it and does not emit anything itself.
+    fn endpoint_state_changed(&self, state: &crate::core::types::EndpointState) {
+        if let Err(err) = self.app.emit("endpoint-state-changed", state.clone()) {
+            tracing::warn!("could not emit endpoint-state-changed: {err}");
+        }
+    }
 }
 
 /// Start the supervisor actor and install its handle. Called once, from
 /// `main.rs`'s setup hook, before any IPC can reach it.
 pub fn start_supervisor(app: tauri::AppHandle) -> Result<(), AppError> {
-    let events: Arc<dyn supervisor::SupervisorEvents> = Arc::new(TauriEvents::new(app));
+    // Two listeners, one actor (T-042): the renderer's events, and the
+    // endpoint's upstream slot, which subscribes to the same broadcasts so the
+    // listener forwards to the port the app allocated without ever asking the
+    // actor for it on the data path.
+    let events: Arc<dyn supervisor::SupervisorEvents> =
+        supervisor::Fanout::new(vec![Arc::new(TauriEvents::new(app)), upstream_slot()]);
     let deps = supervisor::production_deps(events, supervisor::Tuning::default())?;
     supervisor::install(supervisor::spawn(deps))?;
     // One line, so the app's own log answers "is the supervisor up?" without a
@@ -300,6 +328,44 @@ pub fn start_supervisor(app: tauri::AppHandle) -> Result<(), AppError> {
     // startup path reports its success.
     tracing::info!("server supervisor started");
     Ok(())
+}
+
+/// The one upstream slot the supervisor's broadcasts feed and the listener
+/// reads.
+///
+/// A `OnceLock` here is a handle, not state: the value it publishes is the
+/// answer to a question the actor has already answered in public
+/// (`AGENTS.md` invariant 2 forbids a shared `Mutex<ServerState>`, and this is
+/// neither the state nor a lock over it).
+fn upstream_slot() -> Arc<endpoint::UpstreamSlot> {
+    static SLOT: OnceLock<Arc<endpoint::UpstreamSlot>> = OnceLock::new();
+    Arc::clone(SLOT.get_or_init(endpoint::UpstreamSlot::new))
+}
+
+/// T-042 — bind the app's own listener (`PLAN.md` §2.7).
+///
+/// Called once, from `main.rs`'s setup hook after the supervisor: the listener
+/// reports its state into the actor, so the actor must exist first. The bind is
+/// the app's contract with configured clients, so this is not a place to
+/// improvise: the address is the stored `ServerConfig`'s (or the documented
+/// defaults), a taken port yields `BindFailed` rather than another port, and
+/// the app keeps running either way — a client gets a structured `503` from a
+/// bound listener, or a refused connection from a `BindFailed` one, and only
+/// the first is a working app.
+pub fn start_endpoint() -> Result<EndpointState, AppError> {
+    let config = supervisor::load_server_config()?;
+    let state = endpoint::start(endpoint::EndpointConfig {
+        address: config.listen_address,
+        port: config.listen_port,
+        max_concurrent_requests: config.max_concurrent_requests,
+        upstream: upstream_slot(),
+        state_sink: Arc::new(supervisor::ActorEndpointSink),
+        // The transport's own explicit timeout (T-042): a response that begins
+        // after three minutes must complete, and nothing here inherits a
+        // library default to decide that.
+        timeouts: endpoint::Timeouts::default(),
+    })?;
+    Ok(state)
 }
 
 /// T-041's event: `model-load-state-changed` carrying the whole snapshot (§4).

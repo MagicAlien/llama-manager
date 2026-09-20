@@ -62,7 +62,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
 ] }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 # T-022 (docs/TASKS.md, core/installer.rs): archive extraction, SHA-256 and
 # test scratch directories. All three are on PLAN.md §3's approved list —
 # not re-justified here.
@@ -85,6 +85,8 @@ tokio = { version = "1", features = ["sync", "rt", "rt-multi-thread", "macros"] 
 # PLAN.md §3's approved list; no std/tauri-core alternative for a native
 # file picker) — see this PR's Dependencies section.
 tauri-plugin-dialog = "2"
+axum = "0.8.9"
+futures-util = "0.3.34"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

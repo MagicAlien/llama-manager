@@ -141,6 +141,17 @@ fn main() {
             if let Err(err) = ipc::start_orchestrator(app.handle().clone()) {
                 tracing::error!("could not start the model orchestrator: {err}");
             }
+            // T-042 — the app's own listener (`PLAN.md` §2.7). Bound at app
+            // start and independently of `ServerState`, because an address that
+            // stays put is the whole reason the app owns the socket: it is up
+            // while llama-server is stopped, starting, or gone. It reports into
+            // the supervisor above, so it is started after it. A bind failure is
+            // a reported state, not a fatal error — the app is usable, the
+            // address is not, and T-050's screen is where it gets fixed.
+            match ipc::start_endpoint() {
+                Ok(state) => tracing::info!("endpoint state at startup: {state:?}"),
+                Err(err) => tracing::error!("could not start the endpoint listener: {err}"),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -152,6 +163,7 @@ fn main() {
             ipc::remove_runtime,
             ipc::get_active_runtime,
             ipc::get_server_state,
+            ipc::get_endpoint_state,
             ipc::start_server,
             ipc::stop_server,
             ipc::dismiss_crash,

@@ -20,6 +20,7 @@
 
 pub mod backend_selection;
 pub mod capabilities;
+pub mod endpoint;
 pub mod env_probe;
 pub mod estimator;
 #[cfg(test)]
